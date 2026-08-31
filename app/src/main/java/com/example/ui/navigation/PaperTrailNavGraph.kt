@@ -46,6 +46,16 @@ sealed class Screen(val route: String, val title: String) {
   }
 }
 
+fun androidx.navigation.NavController.navigateToTopLevelDestination(route: String) {
+  navigate(route) {
+    popUpTo(graph.findStartDestination().id) {
+      saveState = true
+    }
+    launchSingleTop = true
+    restoreState = true
+  }
+}
+
 @Composable
 fun PaperTrailAppContent(
   viewModel: VaultViewModel
@@ -89,13 +99,7 @@ fun PaperTrailAppContent(
                 selected = isSelected,
                 onClick = {
                   if (currentRoute != route) {
-                    navController.navigate(route) {
-                      popUpTo(navController.graph.findStartDestination().id) {
-                        saveState = true
-                      }
-                      launchSingleTop = true
-                      restoreState = true
-                    }
+                    navController.navigateToTopLevelDestination(route)
                   }
                 },
                 colors = NavigationBarItemDefaults.colors(
@@ -122,7 +126,7 @@ fun PaperTrailAppContent(
             onNavigateToItemDetail = { id -> navController.navigate(Screen.ItemDetail.createRoute(id)) },
             onNavigateToVault = { tab ->
               viewModel.setTab(tab)
-              navController.navigate(Screen.Vault.route)
+              navController.navigateToTopLevelDestination(Screen.Vault.route)
             },
             onLockVault = { viewModel.authManager.lock() }
           )
