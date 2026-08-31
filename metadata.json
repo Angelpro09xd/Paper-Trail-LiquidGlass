@@ -1,0 +1,6 @@
+{
+  "name": "Paper Trail",
+  "description": "Local-first, offline-only receipt, warranty, and subscription vault with on-device OCR and biometric security.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

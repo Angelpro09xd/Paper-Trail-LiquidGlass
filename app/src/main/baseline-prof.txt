@@ -1,0 +1,17 @@
+# Baseline Profile rules for Paper Trail startup and scrolling optimization
+Lcom/example/MainActivity;
+Lcom/example/PaperTrailApp;
+Lcom/example/data/db/AppDatabase;
+Lcom/example/data/db/VaultDao;
+Lcom/example/data/model/VaultItem;
+Lcom/example/data/security/DatabasePassphraseManager;
+Lcom/example/data/security/BiometricAuthManager;
+Lcom/example/data/security/ImageFileManager;
+Lcom/example/data/ocr/ReceiptOcrProcessor;
+Lcom/example/ui/screens/vault/VaultViewModel;
+Lcom/example/ui/screens/dashboard/DashboardScreenKt;
+Lcom/example/ui/screens/vault/VaultListScreenKt;
+Lcom/example/ui/screens/capture/CaptureOcrScreenKt;
+Lcom/example/ui/screens/detail/ItemDetailEditScreenKt;
+Lcom/example/ui/components/PerforatedReceiptCardKt;
+Lcom/example/ui/components/ReceiptCanvasChartKt;
