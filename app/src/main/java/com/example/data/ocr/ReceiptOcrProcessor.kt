@@ -1,6 +1,7 @@
 package com.example.data.ocr
 
 import android.graphics.Bitmap
+import android.util.Log
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
@@ -9,12 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
 import java.util.Locale
-import java.util.regex.Pattern
 import kotlin.coroutines.resume
-import kotlin.math.max
 
 data class OcrExtractedResult(
   val storeName: String,
@@ -22,38 +19,64 @@ data class OcrExtractedResult(
   val purchaseDate: Long,
   val suggestedCategory: String,
   val rawText: String,
-  val detectedLineItems: List<String> = emptyList()
+  val detectedLineItems: List<String> = emptyList(),
+  val isSuccessful: Boolean = true
 )
 
 object ReceiptOcrProcessor {
+  private const val TAG = "ReceiptOcrProcessor"
+
   private val recognizer by lazy {
     TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
   }
 
   suspend fun processImage(bitmap: Bitmap): OcrExtractedResult = withContext(Dispatchers.Default) {
-    val inputImage = InputImage.fromBitmap(bitmap, 0)
-    val visionText = recognizeText(inputImage)
-    parseReceiptText(visionText)
+    try {
+      val inputImage = InputImage.fromBitmap(bitmap, 0)
+      val visionText = recognizeText(inputImage)
+
+      if (visionText == null || visionText.text.isBlank()) {
+        Log.w(TAG, "No text recognized by ML Kit.")
+        OcrExtractedResult(
+          storeName = "",
+          amount = 0.0,
+          purchaseDate = System.currentTimeMillis(),
+          suggestedCategory = "General",
+          rawText = "",
+          detectedLineItems = emptyList(),
+          isSuccessful = false
+        )
+      } else {
+        parseReceiptText(visionText)
+      }
+    } catch (e: Throwable) {
+      Log.e(TAG, "Exception during OCR image processing: ${e.message}", e)
+      OcrExtractedResult(
+        storeName = "",
+        amount = 0.0,
+        purchaseDate = System.currentTimeMillis(),
+        suggestedCategory = "General",
+        rawText = "",
+        detectedLineItems = emptyList(),
+        isSuccessful = false
+      )
+    }
   }
 
-  private suspend fun recognizeText(image: InputImage): Text = suspendCancellableCoroutine { cont ->
+  private suspend fun recognizeText(image: InputImage): Text? = suspendCancellableCoroutine { cont ->
     recognizer.process(image)
       .addOnSuccessListener { text ->
-        if (cont.isActive) cont.resume(text)
-      }
-      .addOnFailureListener { exception ->
         if (cont.isActive) {
-          // If ML Kit recognition encounters any issue, return empty text gracefully
-          cont.resume(recognizer.process(image).result ?: createEmptyText())
+          cont.resume(text)
         }
       }
-  }
-
-  private fun createEmptyText(): Text {
-    // Return empty fallback
-    return TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-      .process(InputImage.fromBitmap(Bitmap.createBitmap(1, 1, Bitmap.Config.ALPHA_8), 0))
-      .result
+      .addOnFailureListener { exception ->
+        Log.w(TAG, "ML Kit text recognition failed: ${exception.message}")
+        if (cont.isActive) {
+          // Resume cleanly with null instead of calling .result on an incomplete task
+          cont.resume(null)
+        }
+      }
   }
 
   fun parseReceiptText(visionText: Text): OcrExtractedResult {
@@ -77,7 +100,8 @@ object ReceiptOcrProcessor {
       purchaseDate = purchaseDate,
       suggestedCategory = suggestedCategory,
       rawText = fullText,
-      detectedLineItems = lineItems
+      detectedLineItems = lineItems,
+      isSuccessful = fullText.isNotBlank()
     )
   }
 
@@ -102,7 +126,7 @@ object ReceiptOcrProcessor {
         }
       }
     }
-    return "Store / Merchant"
+    return ""
   }
 
   private fun extractTotalAmount(lines: List<String>, fullText: String): Double {
@@ -128,7 +152,7 @@ object ReceiptOcrProcessor {
       }
     }
 
-    // 2. Look for any largest monetary pattern in the bottom half of lines
+    // 2. Look for any monetary pattern in lines
     val allPrices = mutableListOf<Double>()
     for (line in lines) {
       val matches = moneyRegex.findAll(line)

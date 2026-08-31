@@ -111,6 +111,7 @@ fun CaptureOcrScreen(
   var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
   var isProcessingOcr by remember { mutableStateOf(false) }
   var ocrCompleted by remember { mutableStateOf(false) }
+  var ocrMessage by remember { mutableStateOf<String?>(null) }
 
   // Form Fields
   var storeName by remember { mutableStateOf("") }
@@ -153,16 +154,26 @@ fun CaptureOcrScreen(
     if (success && tempCameraUri != null) {
       scope.launch {
         isProcessingOcr = true
+        ocrMessage = null
         val bitmap = ImageFileManager.decodeSampledBitmap(context, tempCameraUri!!)
         if (bitmap != null) {
           capturedBitmap = bitmap
           val ocrResult = ReceiptOcrProcessor.processImage(bitmap)
-          storeName = ocrResult.storeName
-          if (ocrResult.amount > 0.0) amountStr = String.format(Locale.US, "%.2f", ocrResult.amount)
-          purchaseDateMs = ocrResult.purchaseDate
-          category = ocrResult.suggestedCategory
-          rawOcrText = ocrResult.rawText
-          ocrCompleted = true
+          if (ocrResult.isSuccessful && ocrResult.rawText.isNotBlank()) {
+            if (ocrResult.storeName.isNotBlank()) storeName = ocrResult.storeName
+            if (ocrResult.amount > 0.0) amountStr = String.format(Locale.US, "%.2f", ocrResult.amount)
+            purchaseDateMs = ocrResult.purchaseDate
+            category = ocrResult.suggestedCategory
+            rawOcrText = ocrResult.rawText
+            ocrCompleted = true
+            ocrMessage = null
+          } else {
+            ocrCompleted = false
+            ocrMessage = "Couldn't read text from this receipt — please enter details manually."
+          }
+        } else {
+          ocrCompleted = false
+          ocrMessage = "Unable to load captured photo. Please try again."
         }
         isProcessingOcr = false
       }
@@ -175,16 +186,26 @@ fun CaptureOcrScreen(
     if (uri != null) {
       scope.launch {
         isProcessingOcr = true
+        ocrMessage = null
         val bitmap = ImageFileManager.decodeSampledBitmap(context, uri)
         if (bitmap != null) {
           capturedBitmap = bitmap
           val ocrResult = ReceiptOcrProcessor.processImage(bitmap)
-          storeName = ocrResult.storeName
-          if (ocrResult.amount > 0.0) amountStr = String.format(Locale.US, "%.2f", ocrResult.amount)
-          purchaseDateMs = ocrResult.purchaseDate
-          category = ocrResult.suggestedCategory
-          rawOcrText = ocrResult.rawText
-          ocrCompleted = true
+          if (ocrResult.isSuccessful && ocrResult.rawText.isNotBlank()) {
+            if (ocrResult.storeName.isNotBlank()) storeName = ocrResult.storeName
+            if (ocrResult.amount > 0.0) amountStr = String.format(Locale.US, "%.2f", ocrResult.amount)
+            purchaseDateMs = ocrResult.purchaseDate
+            category = ocrResult.suggestedCategory
+            rawOcrText = ocrResult.rawText
+            ocrCompleted = true
+            ocrMessage = null
+          } else {
+            ocrCompleted = false
+            ocrMessage = "Couldn't read text from this receipt — please enter details manually."
+          }
+        } else {
+          ocrCompleted = false
+          ocrMessage = "Unable to load selected photo. Please try again."
         }
         isProcessingOcr = false
       }
@@ -286,6 +307,23 @@ fun CaptureOcrScreen(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
+          }
+
+          if (ocrMessage != null) {
+            Box(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f))
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+              Text(
+                text = ocrMessage!!,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer
+              )
+            }
           }
 
           if (isProcessingOcr) {

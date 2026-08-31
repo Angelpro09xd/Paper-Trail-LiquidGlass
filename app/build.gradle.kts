@@ -37,7 +37,8 @@ android {
 
   buildTypes {
     release {
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       isCrunchPngs = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
@@ -51,6 +52,11 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
+  }
+  packaging {
+    jniLibs {
+      useLegacyPackaging = true
+    }
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {
@@ -93,12 +99,8 @@ dependencies {
   // Background Reminders (WorkManager)
   implementation(libs.androidx.work.runtime.ktx)
 
-  // Image loading & CameraX
+  // Image loading
   implementation(libs.coil.compose)
-  implementation(libs.androidx.camera.camera2)
-  implementation(libs.androidx.camera.lifecycle)
-  implementation(libs.androidx.camera.view)
-  implementation(libs.androidx.camera.core)
 
   // Coroutines
   implementation(libs.kotlinx.coroutines.android)

@@ -1,21 +1,21 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# ProGuard & R8 configuration for Paper Trail
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# SQLCipher native and openhelper rules
+-keep class net.zetetic.database.** { *; }
+-keepclassmembers class * extends net.zetetic.database.sqlcipher.SQLiteOpenHelper { *; }
+-keep class androidx.sqlite.db.** { *; }
+-dontwarn net.zetetic.**
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# ML Kit Text Recognition
+-keep class com.google.mlkit.vision.** { *; }
+-dontwarn com.google.mlkit.vision.**
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Room Database & Entities
+-keep class androidx.room.** { *; }
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class * { *; }
+-dontwarn androidx.room.paging.**
+
+# Biometric & Security Crypto
+-keep class androidx.biometric.** { *; }
+-keep class androidx.security.crypto.** { *; }

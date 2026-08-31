@@ -1,5 +1,10 @@
 package com.example.ui.screens.dashboard
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
@@ -53,19 +58,25 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.db.AppDatabase
+import com.example.data.db.DatabasePassphraseManager
 import com.example.data.model.VaultItem
 import com.example.ui.components.CategoryDonutChart
 import com.example.ui.components.DashedDivider
@@ -103,9 +114,36 @@ fun DashboardScreen(
   onNavigateToVault: (VaultTab) -> Unit,
   onLockVault: () -> Unit
 ) {
+  val context = LocalContext.current
   val stats by viewModel.dashboardStats.collectAsStateWithLifecycle()
   val snackbarHostState = remember { SnackbarHostState() }
   val scope = rememberCoroutineScope()
+
+  var hasNotificationPermission by remember {
+    mutableStateOf(
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        ContextCompat.checkSelfPermission(
+          context,
+          Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+      } else {
+        true
+      }
+    )
+  }
+
+  val notificationPermissionLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestPermission()
+  ) { granted ->
+    hasNotificationPermission = granted
+    scope.launch {
+      if (granted) {
+        snackbarHostState.showSnackbar("Notification permissions enabled for reminders.")
+      }
+    }
+  }
+
+  val isEncryptionFallback = AppDatabase.isEncryptionFallbackActive || DatabasePassphraseManager.isFallbackMode
 
   val currencyFmt = NumberFormat.getCurrencyInstance(Locale.US)
   val monthlySubFormatted = currencyFmt.format(stats.monthlySubscriptionCost)
@@ -169,6 +207,96 @@ fun DashboardScreen(
       contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
       verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+      // 0a. Notification permission banner if on Android 13+ and not granted
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
+        item {
+          Card(
+            modifier = Modifier
+              .fillMaxWidth()
+              .clip(RoundedCornerShape(12.dp))
+              .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+              .testTag("notification_permission_banner"),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Icon(
+                  imageVector = Icons.Default.NotificationsActive,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                  modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                  Text(
+                    text = "Enable Reminders",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                  )
+                  Text(
+                    text = "Get alerted before warranties expire or subscriptions renew",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                  )
+                }
+              }
+
+              Spacer(modifier = Modifier.width(8.dp))
+
+              Button(
+                onClick = {
+                  notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.testTag("enable_notifications_banner_button")
+              ) {
+                Text("Enable", style = MaterialTheme.typography.labelMedium)
+              }
+            }
+          }
+        }
+      }
+
+      // 0b. Fallback warning if unencrypted storage is active
+      if (isEncryptionFallback) {
+        item {
+          Card(
+            modifier = Modifier
+              .fillMaxWidth()
+              .clip(RoundedCornerShape(12.dp))
+              .border(1.dp, AmberAlert, RoundedCornerShape(12.dp))
+              .testTag("dashboard_encryption_fallback_warning"),
+            colors = CardDefaults.cardColors(containerColor = AmberAlertContainer)
+          ) {
+            Row(
+              modifier = Modifier.padding(12.dp),
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Icon(Icons.Default.Warning, contentDescription = null, tint = AmberAlertOnContainer, modifier = Modifier.size(20.dp))
+              Spacer(modifier = Modifier.width(8.dp))
+              Text(
+                text = "Unencrypted Storage Mode: Local SQLite fallback active.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AmberAlertOnContainer,
+                fontWeight = FontWeight.Medium
+              )
+            }
+          }
+        }
+      }
+
       // 1. Subscription Monthly Total Ledger Hero Card
       item {
         Card(
