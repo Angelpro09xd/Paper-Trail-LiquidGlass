@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.filled.VideoFile
@@ -171,6 +172,7 @@ fun SecureVaultScreen(
   var itemToDelete by remember { mutableStateOf<SecureFileItem?>(null) }
   var itemToExport by remember { mutableStateOf<SecureFileItem?>(null) }
   var showStorageDialog by remember { mutableStateOf(false) }
+  var showCryptoTerminal by remember { mutableStateOf(false) }
 
   // Re-lock whenever the screen leaves composition or app is backgrounded
   DisposableEffect(lifecycleOwner) {
@@ -292,6 +294,17 @@ fun SecureVaultScreen(
           },
           actions = {
             IconButton(
+              onClick = { showCryptoTerminal = true },
+              modifier = Modifier.testTag("securevault_crypto_terminal_button")
+            ) {
+              Icon(
+                imageVector = Icons.Default.Terminal,
+                contentDescription = "Crypto Security Terminal Logs",
+                tint = SecureVaultAmber
+              )
+            }
+
+            IconButton(
               onClick = { showStorageDialog = true },
               modifier = Modifier.testTag("securevault_storage_options_button")
             ) {
@@ -371,7 +384,7 @@ fun SecureVaultScreen(
                   letterSpacing = 0.5.sp
                 )
                 Text(
-                  text = "Mode: ${storageLocation.title} • Tap to change",
+                  text = "Mode: ${storageLocation.title} • Tap to configure",
                   style = MaterialTheme.typography.bodySmall,
                   fontSize = 11.sp,
                   color = SecureVaultOnAmberContainer.copy(alpha = 0.85f),
@@ -380,12 +393,39 @@ fun SecureVaultScreen(
                 )
               }
             }
-            Text(
-              text = "${secureFiles.size} ${if (secureFiles.size == 1) "file" else "files"}",
-              style = MaterialTheme.typography.labelSmall,
-              fontWeight = FontWeight.Bold,
-              color = SecureVaultOnAmberContainer
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Box(
+                modifier = Modifier
+                  .clip(RoundedCornerShape(6.dp))
+                  .background(SecureVaultAmber.copy(alpha = 0.2f))
+                  .clickable { showCryptoTerminal = true }
+                  .padding(horizontal = 6.dp, vertical = 3.dp)
+              ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  Icon(
+                    imageVector = Icons.Default.Terminal,
+                    contentDescription = "Open Crypto Terminal",
+                    tint = SecureVaultOnAmberContainer,
+                    modifier = Modifier.size(13.dp)
+                  )
+                  Spacer(modifier = Modifier.width(3.dp))
+                  Text(
+                    text = "LOGS",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    color = SecureVaultOnAmberContainer
+                  )
+                }
+              }
+              Spacer(modifier = Modifier.width(8.dp))
+              Text(
+                text = "${secureFiles.size} ${if (secureFiles.size == 1) "file" else "files"}",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = SecureVaultOnAmberContainer
+              )
+            }
           }
         }
 
@@ -638,6 +678,13 @@ fun SecureVaultScreen(
         fileExportLauncher.launch(preview.item.originalFileName)
       },
       onDismiss = { viewModel.closePreview() }
+    )
+  }
+
+  // Real-Time Crypto Security Terminal Bottom Sheet
+  if (showCryptoTerminal) {
+    CryptoTerminalBottomSheet(
+      onDismiss = { showCryptoTerminal = false }
     )
   }
 }

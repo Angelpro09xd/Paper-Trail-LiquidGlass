@@ -5,7 +5,9 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.Log
+import com.example.securevault.logging.CryptoLogger
 import com.example.securevault.model.SecureFileItem
+import com.example.securevault.util.SafeFileMoveHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -112,10 +114,12 @@ class SecureVaultRepository(
   suspend fun importFile(
     uri: Uri,
     cipher: Cipher,
+    deleteOriginalAfterImport: Boolean = true,
     onProgress: (bytesWritten: Long, totalBytes: Long) -> Unit = { _, _ -> }
   ): Result<SecureFileItem> = withContext(Dispatchers.IO) {
     var blobFile: File? = null
     try {
+      CryptoLogger.info("IMPORT", "Initiating secure envelope import for URI: $uri")
       // 1. Resolve original filename and MIME type from URI metadata
       var fileName = "secure_document"
       var fileSize: Long = -1
@@ -135,13 +139,16 @@ class SecureVaultRepository(
       }
 
       val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+      CryptoLogger.info("METADATA", "File: '$fileName' • MIME: $mimeType • Declared Size: ${if (fileSize >= 0) "$fileSize bytes" else "Streamed"}")
 
       // 2. Generate a random 256-bit software AES Data Encryption Key (DEK)
+      CryptoLogger.hardware("DEK_GEN", "Generating ephemeral 256-bit AES-GCM data encryption key (DEK)...")
       val keyGen = KeyGenerator.getInstance("AES").apply { init(256) }
       val dek = keyGen.generateKey()
       val rawDekBytes = dek.encoded
 
       // 3. Wrap (encrypt) the DEK using the hardware Keystore-backed cipher
+      CryptoLogger.hardware("KEYSTORE_WRAP", "Encrypting DEK with Android Keystore Hardware Master Key (AES-256)...")
       val wrappedDekBytes = cipher.doFinal(rawDekBytes)
       val wrappedDekB64 = Base64.encodeToString(wrappedDekBytes, Base64.NO_WRAP)
       val dekWrapIv = cipher.iv
@@ -155,6 +162,7 @@ class SecureVaultRepository(
 
       // Immediately zero out the raw DEK byte array from memory
       rawDekBytes.fill(0)
+      CryptoLogger.hardware("ZEROIZE", "Plaintext DEK bytes purged from volatile memory.")
 
       // 5. Chunk-encrypt content directly to disk: 1MB chunks with individual AES-GCM authentication tags
       val blobName = UUID.randomUUID().toString()
@@ -164,6 +172,8 @@ class SecureVaultRepository(
       var totalBytesWritten = 0L
       var chunkIndex = 0L
       val plainBuffer = ByteArray(CHUNK_SIZE)
+
+      CryptoLogger.info("STREAM_CIPHER", "Streaming AES-256-GCM chunks (1MB blocks) to target cipher blob: $blobName")
 
       FileOutputStream(targetBlobFile).use { fos ->
         BufferedOutputStream(fos, 64 * 1024).use { out ->
@@ -195,6 +205,9 @@ class SecureVaultRepository(
 
               totalBytesWritten += bytesReadThisChunk
               chunkIndex++
+              if (chunkIndex % 5L == 0L || totalBytesWritten == fileSize) {
+                CryptoLogger.info("CHUNK_PROGRESS", "Chunk #$chunkIndex encrypted ($totalBytesWritten bytes total)")
+              }
               onProgress(totalBytesWritten, fileSize)
             }
             out.flush()
@@ -218,9 +231,23 @@ class SecureVaultRepository(
 
       val generatedId = dao.insertFile(item)
       val savedItem = item.copy(id = generatedId)
+      CryptoLogger.success("STORAGE_FLUSH", "Encrypted blob committed: $blobName (${actualSize} bytes) into ${storagePreferences.getStorageLocation().title}")
+
+      // 7. Delete original unencrypted source file if requested ("Move to Vault" behavior)
+      if (deleteOriginalAfterImport) {
+        CryptoLogger.info("FILE_MOVE", "Deleting unencrypted original source file from storage...")
+        val deleted = SafeFileMoveHelper.deleteSourceFile(context, uri)
+        if (deleted) {
+          CryptoLogger.success("FILE_MOVE", "Original unencrypted file removed from device storage (Move to Vault complete).")
+        } else {
+          CryptoLogger.warn("FILE_MOVE", "Source file delete permission was not granted by Android SAF provider (Copy kept).")
+        }
+      }
+
       Log.i(TAG, "Successfully imported and envelope-encrypted file $fileName ($actualSize bytes) into ${storagePreferences.getStorageLocation().title}")
       Result.success(savedItem)
     } catch (e: Throwable) {
+      CryptoLogger.error("IMPORT_FAIL", "Import error: ${e.message}")
       blobFile?.let {
         if (it.exists()) {
           it.delete()
@@ -238,8 +265,10 @@ class SecureVaultRepository(
     onProgress: (bytesExported: Long, totalBytes: Long) -> Unit = { _, _ -> }
   ): Result<Unit> = withContext(Dispatchers.IO) {
     try {
+      CryptoLogger.info("EXPORT_START", "Initiating stream-decryption export for '${item.originalFileName}'")
       val blobFile = findBlobFile(item.encryptedBlobPath)
       if (blobFile == null || !blobFile.exists()) {
+        CryptoLogger.error("EXPORT_FAIL", "Encrypted blob not found on disk")
         return@withContext Result.failure(IllegalStateException("Encrypted blob file does not exist on disk"))
       }
 
@@ -251,12 +280,14 @@ class SecureVaultRepository(
         val legacyStreamCipher: Cipher?
 
         if (item.wrappedDek.isNotEmpty()) {
+          CryptoLogger.hardware("KEYSTORE_UNWRAP", "Unwrapping DEK with Android Keystore Hardware Key (AES-256)...")
           val wrappedDekBytes = Base64.decode(item.wrappedDek, Base64.NO_WRAP)
           val unwrappedDekBytes = cipher.doFinal(wrappedDekBytes)
           unwrappedDekBytesToWipe = unwrappedDekBytes
           dekKey = SecretKeySpec(unwrappedDekBytes, "AES")
           contentIvBytes = Base64.decode(item.iv, Base64.NO_WRAP)
           legacyStreamCipher = null
+          CryptoLogger.hardware("DEK_READY", "DEK unwrapped. Authenticating AES-GCM tags during streaming...")
         } else {
           dekKey = null
           contentIvBytes = null
@@ -335,12 +366,15 @@ class SecureVaultRepository(
           }
         } ?: return@withContext Result.failure(IllegalStateException("Could not open destination output stream"))
 
+        CryptoLogger.success("EXPORT_COMPLETE", "Successfully decrypted & exported ${item.originalFileName} ($totalBytesWritten bytes)")
         Log.i(TAG, "Successfully exported file ${item.originalFileName} ($totalBytesWritten bytes)")
         Result.success(Unit)
       } finally {
         unwrappedDekBytesToWipe?.fill(0)
+        CryptoLogger.hardware("ZEROIZE", "Unwrapped DEK zeroized from volatile memory.")
       }
     } catch (e: Throwable) {
+      CryptoLogger.error("EXPORT_FAIL", "Export failed: ${e.message}")
       Log.e(TAG, "Export failed for item ${item.id}: ${e.message}", e)
       Result.failure(e)
     }
@@ -352,12 +386,15 @@ class SecureVaultRepository(
     maxPreviewSizeBytes: Long = MAX_PREVIEW_SIZE_BYTES
   ): Result<DecryptionResult> = withContext(Dispatchers.IO) {
     try {
+      CryptoLogger.info("PREVIEW_DECRYPT", "Authorizing in-memory decryption for preview: '${item.originalFileName}'")
       val blobFile = findBlobFile(item.encryptedBlobPath)
       if (blobFile == null || !blobFile.exists()) {
+        CryptoLogger.error("PREVIEW_FAIL", "Encrypted blob file does not exist on disk")
         return@withContext Result.failure(IllegalStateException("Encrypted blob file does not exist on disk"))
       }
 
       if (item.fileSizeBytes > maxPreviewSizeBytes) {
+        CryptoLogger.warn("PREVIEW_LIMIT", "File size (${item.fileSizeBytes} B) exceeds max preview threshold (80MB).")
         return@withContext Result.success(DecryptionResult.TooLargeToPreview(item.fileSizeBytes))
       }
 
@@ -369,6 +406,7 @@ class SecureVaultRepository(
         val legacyStreamCipher: Cipher?
 
         if (item.wrappedDek.isNotEmpty()) {
+          CryptoLogger.hardware("KEYSTORE_UNWRAP", "Unwrapping DEK with hardware Keystore...")
           val wrappedDekBytes = Base64.decode(item.wrappedDek, Base64.NO_WRAP)
           val unwrappedDekBytes = cipher.doFinal(wrappedDekBytes)
           unwrappedDekBytesToWipe = unwrappedDekBytes
@@ -460,14 +498,18 @@ class SecureVaultRepository(
 
         if (isOversized) {
           val reportedSize = if (item.fileSizeBytes > 0) item.fileSizeBytes else totalRead
+          CryptoLogger.warn("PREVIEW_LIMIT", "Oversized file ($reportedSize bytes). Preview truncated.")
           Result.success(DecryptionResult.TooLargeToPreview(reportedSize))
         } else {
+          CryptoLogger.success("PREVIEW_READY", "Plaintext rendered into RAM buffer (${baos.size()} bytes). Zeroized on dismiss.")
           Result.success(DecryptionResult.Success(baos.toByteArray()))
         }
       } finally {
         unwrappedDekBytesToWipe?.fill(0)
+        CryptoLogger.hardware("ZEROIZE", "Plaintext key wiped from heap.")
       }
     } catch (e: Throwable) {
+      CryptoLogger.error("PREVIEW_FAIL", "Decryption error: ${e.message}")
       Log.e(TAG, "Decryption failed for item ${item.id}: ${e.message}", e)
       Result.failure(e)
     }
