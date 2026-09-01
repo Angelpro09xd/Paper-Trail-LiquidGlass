@@ -19,8 +19,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
@@ -65,12 +65,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.system.exitProcess
 
 @Composable
 fun SecurityIntegrityGateScreen(
   initialReport: IntegrityReport,
-  onResolved: (IntegrityReport) -> Unit
+  onResolved: (IntegrityReport) -> Unit,
+  onReturnToApp: () -> Unit
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
@@ -91,11 +91,6 @@ fun SecurityIntegrityGateScreen(
         onResolved(newReport)
       }
     }
-  }
-
-  fun exitApp() {
-    val activity = context as? Activity
-    activity?.finishAffinity() ?: exitProcess(0)
   }
 
   Scaffold(
@@ -184,7 +179,7 @@ fun SecurityIntegrityGateScreen(
           .padding(14.dp)
       ) {
         Text(
-          text = "Why this is blocked: When SELinux is in Permissive/Spoofed mode or device storage is unencrypted, the Linux kernel does not enforce mandatory process sandboxing. Other apps or background processes could extract decrypted cryptographic memory or intercept hardware keystore keys.",
+          text = "Why SecureVault is locked: When SELinux is in Permissive/Spoofed mode or device storage is unencrypted, the Linux kernel does not enforce mandatory process sandboxing. Other apps or background processes could extract decrypted cryptographic memory or intercept hardware keystore keys. The rest of Paper Trail remains accessible, but SecureVault requires hardware-grade isolation.",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           lineHeight = 18.sp
@@ -222,15 +217,15 @@ fun SecurityIntegrityGateScreen(
         }
 
         OutlinedButton(
-          onClick = { exitApp() },
+          onClick = { onReturnToApp() },
           modifier = Modifier
             .fillMaxWidth()
-            .testTag("exit_application_button"),
-          colors = ButtonDefaults.outlinedButtonColors(contentColor = StampRed)
+            .testTag("return_to_app_button"),
+          colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
         ) {
-          Icon(Icons.Default.ExitToApp, contentDescription = null, modifier = Modifier.size(18.dp))
+          Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(18.dp))
           Spacer(modifier = Modifier.width(8.dp))
-          Text("Exit Application")
+          Text("Return to App")
         }
       }
     }

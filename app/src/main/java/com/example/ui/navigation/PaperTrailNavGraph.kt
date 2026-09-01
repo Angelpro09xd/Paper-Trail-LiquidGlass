@@ -34,12 +34,9 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.data.TutorialPreferences
-import com.example.data.security.SecurityAuditPreferences
-import com.example.data.security.SecurityIntegrityAuditor
 import com.example.securevault.ui.SecureVaultScreen
 import com.example.securevault.ui.SecureVaultViewModel
 import com.example.ui.screens.auth.BiometricLockScreen
-import com.example.ui.screens.auth.SecurityIntegrityGateScreen
 import com.example.ui.screens.capture.CaptureOcrScreen
 import com.example.ui.screens.dashboard.DashboardScreen
 import com.example.ui.screens.detail.ItemDetailEditScreen
@@ -87,19 +84,7 @@ fun PaperTrailAppContent(
 
   val isUnlocked by viewModel.authManager.isUnlocked.collectAsStateWithLifecycle()
 
-  val isStrictGateEnabled = remember { SecurityAuditPreferences.isStrictGateEnabled(context) }
-  var integrityReport by remember {
-    mutableStateOf(if (isStrictGateEnabled) SecurityIntegrityAuditor.runFullAudit(context) else null)
-  }
-
-  if (integrityReport != null && integrityReport!!.hasCriticalFailures && isStrictGateEnabled) {
-    SecurityIntegrityGateScreen(
-      initialReport = integrityReport!!,
-      onResolved = { newReport ->
-        integrityReport = newReport
-      }
-    )
-  } else if (!isUnlocked && viewModel.authManager.isLockConfigured) {
+  if (!isUnlocked && viewModel.authManager.isLockConfigured) {
     BiometricLockScreen(
       authManager = viewModel.authManager,
       onUnlocked = { /* unlocked state updated in StateFlow */ }
@@ -193,7 +178,12 @@ fun PaperTrailAppContent(
 
         composable(Screen.SecureVault.route) {
           SecureVaultScreen(
-            viewModel = secureVaultViewModel
+            viewModel = secureVaultViewModel,
+            onNavigateBack = {
+              if (!navController.popBackStack()) {
+                navController.navigateToTopLevelDestination(Screen.Dashboard.route)
+              }
+            }
           )
         }
 

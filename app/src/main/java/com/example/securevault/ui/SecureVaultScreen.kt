@@ -93,7 +93,13 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.security.IntegrityReport
+import com.example.data.security.SecurityAuditPreferences
+import com.example.data.security.SecurityIntegrityAuditor
 import com.example.securevault.model.SecureFileItem
+import com.example.ui.screens.auth.SecurityIntegrityGateScreen
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -106,7 +112,8 @@ private val SecureVaultOnAmberContainer = Color(0xFF92400E)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SecureVaultScreen(
-  viewModel: SecureVaultViewModel
+  viewModel: SecureVaultViewModel,
+  onNavigateBack: () -> Unit = {}
 ) {
   val context = LocalContext.current
   val activity = context as? FragmentActivity
@@ -117,6 +124,24 @@ fun SecureVaultScreen(
   val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
   val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
   val activePreview by viewModel.activePreview.collectAsStateWithLifecycle()
+
+  val isStrictGateEnabled = remember { SecurityAuditPreferences.isStrictGateEnabled(context) }
+  var integrityReport by remember { mutableStateOf<IntegrityReport?>(null) }
+  var isAuditing by remember { mutableStateOf(isStrictGateEnabled) }
+
+  LaunchedEffect(isStrictGateEnabled) {
+    if (isStrictGateEnabled) {
+      isAuditing = true
+      val report = withContext(Dispatchers.Default) {
+        SecurityIntegrityAuditor.runFullAudit(context)
+      }
+      integrityReport = report
+      isAuditing = false
+    } else {
+      integrityReport = null
+      isAuditing = false
+    }
+  }
 
   val snackbarHostState = remember { SnackbarHostState() }
   var itemToDelete by remember { mutableStateOf<SecureFileItem?>(null) }
@@ -151,7 +176,16 @@ fun SecureVaultScreen(
     }
   }
 
-  if (!isUnlocked) {
+  if (isStrictGateEnabled && integrityReport != null && integrityReport!!.hasCriticalFailures) {
+    // Isolated hardware security failure: Gate SecureVault without impacting the rest of Paper Trail
+    SecurityIntegrityGateScreen(
+      initialReport = integrityReport!!,
+      onResolved = { newReport ->
+        integrityReport = newReport
+      },
+      onReturnToApp = onNavigateBack
+    )
+  } else if (!isUnlocked) {
     // Dedicated Biometric Lock Screen for SecureVault
     SecureVaultLockGate(
       onUnlock = {
@@ -159,7 +193,7 @@ fun SecureVaultScreen(
           viewModel.unlockVault(it)
         }
       },
-      isLoading = isLoading
+      isLoading = isLoading || isAuditing
     )
   } else {
     // Unlocked SecureVault UI

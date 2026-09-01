@@ -7,6 +7,8 @@ import android.util.Log
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.security.SecurityAuditPreferences
+import com.example.data.security.SecurityIntegrityAuditor
 import com.example.securevault.data.SecureVaultDatabase
 import com.example.securevault.data.SecureVaultKeyManager
 import com.example.securevault.data.SecureVaultRepository
@@ -20,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.crypto.Cipher
 
 data class SecureVaultPreview(
@@ -91,31 +94,44 @@ class SecureVaultViewModel(application: Application) : AndroidViewModel(applicat
     onSuccess: () -> Unit = {}
   ) {
     _isLoading.value = true
-    try {
-      val cipher = try {
-        SecureVaultKeyManager.initEncryptCipher()
-      } catch (e: Exception) {
-        Log.w(TAG, "Cipher init without prompt: ${e.message}")
-        null
+    viewModelScope.launch {
+      if (SecurityAuditPreferences.isStrictGateEnabled(activity)) {
+        val report = withContext(Dispatchers.Default) {
+          SecurityIntegrityAuditor.runFullAudit(activity)
+        }
+        if (report.hasCriticalFailures) {
+          _isLoading.value = false
+          _errorMessage.value = "Hardware security check failed: SELinux or storage encryption compromised."
+          return@launch
+        }
       }
 
-      authManager.promptBiometric(
-        activity = activity,
-        cipher = cipher,
-        title = "Unlock SecureVault",
-        subtitle = "Biometric confirmation required to open hardware-encrypted storage",
-        onSuccess = {
-          _isLoading.value = false
-          onSuccess()
-        },
-        onError = { err ->
-          _isLoading.value = false
-          _errorMessage.value = err
+      try {
+        val cipher = try {
+          SecureVaultKeyManager.initEncryptCipher()
+        } catch (e: Exception) {
+          Log.w(TAG, "Cipher init without prompt: ${e.message}")
+          null
         }
-      )
-    } catch (e: Exception) {
-      _isLoading.value = false
-      _errorMessage.value = "Failed to start biometric authentication: ${e.message}"
+
+        authManager.promptBiometric(
+          activity = activity,
+          cipher = cipher,
+          title = "Unlock SecureVault",
+          subtitle = "Biometric confirmation required to open hardware-encrypted storage",
+          onSuccess = {
+            _isLoading.value = false
+            onSuccess()
+          },
+          onError = { err ->
+            _isLoading.value = false
+            _errorMessage.value = err
+          }
+        )
+      } catch (e: Exception) {
+        _isLoading.value = false
+        _errorMessage.value = "Failed to start biometric authentication: ${e.message}"
+      }
     }
   }
 
