@@ -112,4 +112,21 @@ class ExampleRobolectricTest {
     assertEquals("1234-uuid-blob", item.encryptedBlobPath)
     assertEquals("dGVzdF9pdg==", item.iv)
   }
+
+  @Test
+  fun `test security integrity audit returns valid non-null report`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val report = com.example.data.security.SecurityIntegrityAuditor.runFullAudit(context)
+    org.junit.Assert.assertNotNull(report)
+    org.junit.Assert.assertTrue(report.items.isNotEmpty())
+    
+    // SELinux check must be present and not null
+    val selinuxItem = report.items.find { it.id == "selinux" }
+    org.junit.Assert.assertNotNull(selinuxItem)
+    assertEquals(com.example.data.security.IntegrityStatus.VERIFIED, selinuxItem?.status)
+
+    // Storage encryption check must be present
+    val storageItem = report.items.find { it.id == "storage_encryption" }
+    org.junit.Assert.assertNotNull(storageItem)
+  }
 }

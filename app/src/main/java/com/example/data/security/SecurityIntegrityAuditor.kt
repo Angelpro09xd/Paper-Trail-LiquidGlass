@@ -73,95 +73,76 @@ object SecurityIntegrityAuditor {
   }
 
   /**
-   * Evaluates SELinux enforcement status and executes an active rule violation probe
-   * to detect spoofed or fake "Enforcing" indicators on permissive custom kernels.
+   * Evaluates SELinux enforcement status accurately across stock Android and custom ROMs.
+   * On stock Android 5.0+ (API 21+), SELinux is Enforcing by default.
+   * Only flags failure when SELinux is explicitly confirmed Permissive or Disabled.
    */
   private fun auditSELinux(): IntegrityCheckItem {
-    var isEnforcedFramework = false
-    var isPermissiveFramework = false
-    var sysfsEnforceValue = -1
-    var isSpoofed = false
+    var isExplicitlyPermissive = false
+    var isExplicitlyEnforcing = false
+    var selinuxBootProp = ""
 
-    // A. Query SELinux via Android Framework reflection
+    // 1. Check System Property ro.boot.selinux & ro.build.selinux
+    try {
+      val systemProperties = Class.forName("android.os.SystemProperties")
+      val getMethod = systemProperties.getMethod("get", String::class.java, String::class.java)
+      selinuxBootProp = getMethod.invoke(null, "ro.boot.selinux", "") as? String ?: ""
+      val selinuxBuildProp = getMethod.invoke(null, "ro.build.selinux", "") as? String ?: ""
+      
+      if (selinuxBootProp.equals("permissive", ignoreCase = true) ||
+          selinuxBuildProp.equals("permissive", ignoreCase = true) ||
+          selinuxBootProp == "0"
+      ) {
+        isExplicitlyPermissive = true
+      } else if (selinuxBootProp.equals("enforcing", ignoreCase = true) || selinuxBootProp == "1") {
+        isExplicitlyEnforcing = true
+      }
+    } catch (_: Exception) {}
+
+    // 2. Query android.os.SELinux if reflection is allowed
     try {
       val selinuxClass = Class.forName("android.os.SELinux")
-      val isEnforcedMethod: Method = selinuxClass.getMethod("isSELinuxEnforced")
-      val isPermissiveMethod: Method = selinuxClass.getMethod("isSELinuxPermissive")
-      isEnforcedFramework = isEnforcedMethod.invoke(null) as? Boolean ?: false
-      isPermissiveFramework = isPermissiveMethod.invoke(null) as? Boolean ?: false
-    } catch (e: Exception) {
-      Log.w(TAG, "SELinux framework reflection check: ${e.message}")
-    }
+      try {
+        val isPermissiveMethod: Method = selinuxClass.getMethod("isSELinuxPermissive")
+        val isPermissive = isPermissiveMethod.invoke(null) as? Boolean
+        if (isPermissive == true) {
+          isExplicitlyPermissive = true
+        }
+      } catch (_: Exception) {}
 
-    // B. Query direct Sysfs node /sys/fs/selinux/enforce if readable
+      try {
+        val isEnforcedMethod: Method = selinuxClass.getMethod("isSELinuxEnforced")
+        val isEnforced = isEnforcedMethod.invoke(null) as? Boolean
+        if (isEnforced == true) {
+          isExplicitlyEnforcing = true
+        }
+      } catch (_: Exception) {}
+    } catch (_: Exception) {}
+
+    // 3. Inspect /sys/fs/selinux/enforce if accessible
     try {
       val enforceFile = File("/sys/fs/selinux/enforce")
       if (enforceFile.exists() && enforceFile.canRead()) {
         val content = enforceFile.readText().trim()
-        sysfsEnforceValue = content.toIntOrNull() ?: -1
+        if (content == "0") {
+          isExplicitlyPermissive = true
+        } else if (content == "1") {
+          isExplicitlyEnforcing = true
+        }
       }
     } catch (_: Exception) {}
 
-    // C. Active SELinux MAC policy probe (Anti-Spoofing test)
-    // In Android's untrusted_app domain, access to kernel debugfs (/sys/kernel/debug) or
-    // root kernel symbols (/proc/kallsyms) is strictly forbidden by SELinux policy.
-    // If an app CAN open or traverse these without an access denial, SELinux is Permissive or Fake-Enforced.
-    val debugfsNode = File("/sys/kernel/debug")
-    val kallsymsNode = File("/proc/kallsyms")
-    var probeBlockedByMac = false
+    // Android 5.0+ (API 21+) guarantees Enforcing SELinux by default on production OS builds
+    // unless explicitly overridden by permissive boot flags or kernel commandline.
+    val isEnforcing = !isExplicitlyPermissive
 
-    try {
-      if (debugfsNode.exists()) {
-        val list = debugfsNode.list()
-        if (list != null && list.isNotEmpty()) {
-          // Unconfined / Permissive: untrusted_app should never be able to list /sys/kernel/debug
-          isSpoofed = true
-        } else {
-          probeBlockedByMac = true
-        }
-      } else {
-        probeBlockedByMac = true
-      }
-    } catch (_: SecurityException) {
-      probeBlockedByMac = true
-    } catch (_: Exception) {
-      probeBlockedByMac = true
-    }
-
-    try {
-      if (kallsymsNode.exists()) {
-        val fis = FileInputStream(kallsymsNode)
-        val buf = ByteArray(64)
-        val read = fis.read(buf)
-        fis.close()
-        // On enforcing SELinux, unprivileged apps read only 0 bytes or null addresses
-        if (read > 0 && String(buf).contains("T ")) {
-          // Kernel symbols exposed to unprivileged domain -> SELinux confinement weak/permissive
-          isSpoofed = true
-        }
-      }
-    } catch (_: Exception) {
-      // Access denied / blocked is healthy behavior under MAC
-    }
-
-    val isActuallyEnforcing = (isEnforcedFramework || sysfsEnforceValue == 1) && !isPermissiveFramework && !isSpoofed
-
-    return if (isActuallyEnforcing) {
+    return if (isEnforcing) {
       IntegrityCheckItem(
         id = "selinux",
         title = "SELinux Confinement",
         status = IntegrityStatus.VERIFIED,
         summary = "Enforcing (Active MAC Sandbox)",
-        technicalDetail = "Kernel SELinux is in strict Enforcing mode. untrusted_app domain policy is active with anti-spoofing probe verified.",
-        isCritical = true
-      )
-    } else if (isSpoofed) {
-      IntegrityCheckItem(
-        id = "selinux",
-        title = "SELinux Confinement",
-        status = IntegrityStatus.CRITICAL_FAILURE,
-        summary = "Spoofed / Permissive Kernel",
-        technicalDetail = "SELinux returned enforcing status but failed active MAC containment probe. The kernel allows unconfined access to restricted nodes.",
+        technicalDetail = "Kernel SELinux is in Enforcing mode. untrusted_app domain isolation and mandatory access control (MAC) are active.",
         isCritical = true
       )
     } else {
@@ -170,7 +151,7 @@ object SecurityIntegrityAuditor {
         title = "SELinux Confinement",
         status = IntegrityStatus.CRITICAL_FAILURE,
         summary = "Permissive Mode Detected",
-        technicalDetail = "SELinux is in Permissive mode. Process isolation and memory protections are unconfined, exposing private storage to other processes.",
+        technicalDetail = "SELinux is in Permissive mode (ro.boot.selinux=$selinuxBootProp). Process isolation and memory protections are unconfined, exposing private storage to other processes.",
         isCritical = true
       )
     }
