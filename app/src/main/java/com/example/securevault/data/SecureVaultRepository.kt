@@ -52,7 +52,8 @@ class SecureVaultRepository(
 
   suspend fun importFile(
     uri: Uri,
-    cipher: Cipher
+    cipher: Cipher,
+    onProgress: (bytesWritten: Long, totalBytes: Long) -> Unit = { _, _ -> }
   ): Result<SecureFileItem> = withContext(Dispatchers.IO) {
     var blobFile: File? = null
     try {
@@ -101,15 +102,22 @@ class SecureVaultRepository(
       val targetBlobFile = File(vaultDir, blobName)
       blobFile = targetBlobFile
 
-      // Adapt buffer size: 64KB for large files to maximize flash storage throughput, 16KB for smaller items
-      val bufferSize = if (fileSize > 5L * 1024 * 1024) 64 * 1024 else 16 * 1024
+      // Adapt buffer size: 128KB for >50MB files (movies, game APKs), 64KB for >5MB, 16KB for smaller items
+      val bufferSize = when {
+        fileSize > 50L * 1024 * 1024 -> 128 * 1024
+        fileSize > 5L * 1024 * 1024 -> 64 * 1024
+        else -> 16 * 1024
+      }
 
+      var totalBytesWritten = 0L
       context.contentResolver.openInputStream(uri)?.let { BufferedInputStream(it, bufferSize) }?.use { input ->
         CipherOutputStream(BufferedOutputStream(FileOutputStream(targetBlobFile), bufferSize), dekCipher).use { cipherOut ->
           val buffer = ByteArray(bufferSize)
           var bytesRead: Int
           while (input.read(buffer).also { bytesRead = it } != -1) {
             cipherOut.write(buffer, 0, bytesRead)
+            totalBytesWritten += bytesRead
+            onProgress(totalBytesWritten, fileSize)
           }
           cipherOut.flush()
         }
@@ -140,6 +148,70 @@ class SecureVaultRepository(
         }
       }
       Log.e(TAG, "Error importing file to SecureVault: ${e.message}", e)
+      Result.failure(e)
+    }
+  }
+
+  suspend fun exportFile(
+    item: SecureFileItem,
+    destinationUri: Uri,
+    cipher: Cipher,
+    onProgress: (bytesExported: Long, totalBytes: Long) -> Unit = { _, _ -> }
+  ): Result<Unit> = withContext(Dispatchers.IO) {
+    try {
+      val blobFile = File(vaultDir, item.encryptedBlobPath)
+      if (!blobFile.exists()) {
+        return@withContext Result.failure(IllegalStateException("Encrypted blob file does not exist on disk"))
+      }
+
+      val streamCipher: Cipher
+      var unwrappedDekBytesToWipe: ByteArray? = null
+
+      try {
+        if (item.wrappedDek.isNotEmpty()) {
+          val wrappedDekBytes = Base64.decode(item.wrappedDek, Base64.NO_WRAP)
+          val unwrappedDekBytes = cipher.doFinal(wrappedDekBytes)
+          unwrappedDekBytesToWipe = unwrappedDekBytes
+          val dekKey = SecretKeySpec(unwrappedDekBytes, "AES")
+
+          val contentIvBytes = Base64.decode(item.iv, Base64.NO_WRAP)
+          val dekCipher = Cipher.getInstance(DEK_TRANSFORMATION)
+          val spec = GCMParameterSpec(GCM_TAG_LENGTH, contentIvBytes)
+          dekCipher.init(Cipher.DECRYPT_MODE, dekKey, spec)
+          streamCipher = dekCipher
+        } else {
+          streamCipher = cipher
+        }
+
+        val bufferSize = when {
+          item.fileSizeBytes > 50L * 1024 * 1024 -> 128 * 1024
+          item.fileSizeBytes > 5L * 1024 * 1024 -> 64 * 1024
+          else -> 16 * 1024
+        }
+
+        var totalBytesWritten = 0L
+        context.contentResolver.openOutputStream(destinationUri)?.let { BufferedOutputStream(it, bufferSize) }?.use { output ->
+          BufferedInputStream(FileInputStream(blobFile), bufferSize).use { fis ->
+            CipherInputStream(fis, streamCipher).use { cis ->
+              val buffer = ByteArray(bufferSize)
+              var bytesRead: Int
+              while (cis.read(buffer).also { bytesRead = it } != -1) {
+                output.write(buffer, 0, bytesRead)
+                totalBytesWritten += bytesRead
+                onProgress(totalBytesWritten, item.fileSizeBytes)
+              }
+              output.flush()
+            }
+          }
+        } ?: return@withContext Result.failure(IllegalStateException("Could not open destination output stream"))
+
+        Log.i(TAG, "Successfully exported file ${item.originalFileName} ($totalBytesWritten bytes)")
+        Result.success(Unit)
+      } finally {
+        unwrappedDekBytesToWipe?.fill(0)
+      }
+    } catch (e: Throwable) {
+      Log.e(TAG, "Export failed for item ${item.id}: ${e.message}", e)
       Result.failure(e)
     }
   }

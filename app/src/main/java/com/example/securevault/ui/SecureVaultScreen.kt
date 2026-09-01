@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.EnhancedEncryption
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Image
@@ -45,6 +46,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.WarningAmber
@@ -58,6 +60,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -74,6 +77,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -101,6 +105,7 @@ import com.example.data.security.SecurityIntegrityAuditor
 import com.example.securevault.model.SecureFileItem
 import com.example.ui.screens.auth.SecurityIntegrityGateScreen
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -124,6 +129,7 @@ fun SecureVaultScreen(
   val isUnlocked by viewModel.authManager.isUnlocked.collectAsStateWithLifecycle()
   val secureFiles by viewModel.secureFiles.collectAsStateWithLifecycle()
   val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+  val transferProgress by viewModel.transferProgress.collectAsStateWithLifecycle()
   val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
   val activePreview by viewModel.activePreview.collectAsStateWithLifecycle()
 
@@ -146,7 +152,9 @@ fun SecureVaultScreen(
   }
 
   val snackbarHostState = remember { SnackbarHostState() }
+  val coroutineScope = rememberCoroutineScope()
   var itemToDelete by remember { mutableStateOf<SecureFileItem?>(null) }
+  var itemToExport by remember { mutableStateOf<SecureFileItem?>(null) }
 
   // Re-lock whenever the screen leaves composition or app is backgrounded
   DisposableEffect(lifecycleOwner) {
@@ -162,13 +170,28 @@ fun SecureVaultScreen(
     }
   }
 
-  // SAF Document Picker for any file type
+  // SAF Document Picker for importing any file type (including large movies and APKs)
   val filePickerLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.OpenDocument()
   ) { uri ->
     if (uri != null && activity != null) {
       viewModel.importFile(uri, activity)
     }
+  }
+
+  // SAF Document Creator for streaming decrypted files to external storage
+  val fileExportLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.CreateDocument("*/*")
+  ) { uri ->
+    val targetItem = itemToExport
+    if (uri != null && targetItem != null && activity != null) {
+      viewModel.exportFile(targetItem, uri, activity) {
+        coroutineScope.launch {
+          snackbarHostState.showSnackbar("Successfully exported ${targetItem.originalFileName}")
+        }
+      }
+    }
+    itemToExport = null
   }
 
   LaunchedEffect(errorMessage) {
@@ -302,7 +325,96 @@ fun SecureVaultScreen(
           }
         }
 
-        if (isLoading) {
+        // Transfer Progress Banner (for large movies, APKs, and bulk files)
+        if (transferProgress.isTransferring) {
+          Card(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 16.dp, vertical = 6.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            shape = RoundedCornerShape(12.dp)
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp)
+            ) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  Icon(
+                    imageVector = Icons.Default.Sync,
+                    contentDescription = null,
+                    tint = SecureVaultAmber,
+                    modifier = Modifier.size(18.dp)
+                  )
+                  Spacer(modifier = Modifier.width(8.dp))
+                  Text(
+                    text = transferProgress.actionLabel,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                  )
+                }
+                if (transferProgress.totalBytes > 0) {
+                  Text(
+                    text = "${(transferProgress.progressFraction * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = SecureVaultAmber
+                  )
+                }
+              }
+              Spacer(modifier = Modifier.height(8.dp))
+              if (transferProgress.totalBytes > 0) {
+                LinearProgressIndicator(
+                  progress = { transferProgress.progressFraction },
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                  color = SecureVaultAmber,
+                  trackColor = SecureVaultAmber.copy(alpha = 0.2f)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                  Text(
+                    text = formatFileSize(transferProgress.bytesTransferred),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                  )
+                  Text(
+                    text = formatFileSize(transferProgress.totalBytes),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                  )
+                }
+              } else {
+                LinearProgressIndicator(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                  color = SecureVaultAmber,
+                  trackColor = SecureVaultAmber.copy(alpha = 0.2f)
+                )
+                if (transferProgress.bytesTransferred > 0) {
+                  Spacer(modifier = Modifier.height(6.dp))
+                  Text(
+                    text = "${formatFileSize(transferProgress.bytesTransferred)} processed",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                  )
+                }
+              }
+            }
+          }
+        } else if (isLoading) {
           Box(
             modifier = Modifier
               .fillMaxWidth()
@@ -386,6 +498,10 @@ fun SecureVaultScreen(
                     viewModel.previewFile(item, act)
                   }
                 },
+                onExport = {
+                  itemToExport = item
+                  fileExportLauncher.launch(item.originalFileName)
+                },
                 onDelete = { itemToDelete = item }
               )
             }
@@ -426,8 +542,14 @@ fun SecureVaultScreen(
 
   // In-Memory Decryption Preview Dialog
   if (activePreview != null) {
+    val preview = activePreview!!
     SecureFilePreviewDialog(
-      preview = activePreview!!,
+      preview = preview,
+      onExport = {
+        itemToExport = preview.item
+        viewModel.closePreview()
+        fileExportLauncher.launch(preview.item.originalFileName)
+      },
       onDismiss = { viewModel.closePreview() }
     )
   }
@@ -514,6 +636,7 @@ private fun SecureVaultLockGate(
 private fun SecureFileCard(
   item: SecureFileItem,
   onPreview: () -> Unit,
+  onExport: () -> Unit,
   onDelete: () -> Unit
 ) {
   val dateFormatted = remember(item.dateAdded) {
@@ -587,6 +710,18 @@ private fun SecureFileCard(
 
       // Actions
       IconButton(
+        onClick = onExport,
+        modifier = Modifier.size(36.dp)
+      ) {
+        Icon(
+          imageVector = Icons.Default.FileDownload,
+          contentDescription = "Export / Decrypt file",
+          tint = SecureVaultAmber,
+          modifier = Modifier.size(20.dp)
+        )
+      }
+
+      IconButton(
         onClick = onPreview,
         modifier = Modifier.size(36.dp)
       ) {
@@ -616,6 +751,7 @@ private fun SecureFileCard(
 @Composable
 private fun SecureFilePreviewDialog(
   preview: SecureVaultPreview,
+  onExport: () -> Unit,
   onDismiss: () -> Unit
 ) {
   val item = preview.item
@@ -786,12 +922,26 @@ private fun SecureFilePreviewDialog(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Button(
-          onClick = onDismiss,
+        Row(
           modifier = Modifier.fillMaxWidth(),
-          colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-          Text(if (preview.isTooLargeToPreview) "Close" else "Close & Wipe from RAM")
+          OutlinedButton(
+            onClick = onExport,
+            modifier = Modifier.weight(1f)
+          ) {
+            Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp), tint = SecureVaultAmber)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Export", color = SecureVaultAmber, fontWeight = FontWeight.Bold)
+          }
+
+          Button(
+            onClick = onDismiss,
+            modifier = Modifier.weight(1f),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+          ) {
+            Text(if (preview.isTooLargeToPreview) "Close" else "Close & Wipe")
+          }
         }
       }
     }

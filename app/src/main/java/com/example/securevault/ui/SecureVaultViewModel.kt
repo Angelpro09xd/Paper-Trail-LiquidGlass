@@ -25,6 +25,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.crypto.Cipher
 
+data class TransferProgress(
+  val isTransferring: Boolean = false,
+  val fileName: String = "",
+  val bytesTransferred: Long = 0L,
+  val totalBytes: Long = 0L,
+  val actionLabel: String = "" // "Encrypting & Importing" or "Decrypting & Exporting"
+) {
+  val progressFraction: Float
+    get() = if (totalBytes > 0) (bytesTransferred.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f) else 0f
+}
+
 data class SecureVaultPreview(
   val item: SecureFileItem,
   val decryptedBytes: ByteArray?,
@@ -74,6 +85,9 @@ class SecureVaultViewModel(application: Application) : AndroidViewModel(applicat
   private val _isLoading = MutableStateFlow(false)
   val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+  private val _transferProgress = MutableStateFlow(TransferProgress())
+  val transferProgress: StateFlow<TransferProgress> = _transferProgress.asStateFlow()
+
   private val _errorMessage = MutableStateFlow<String?>(null)
   val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
@@ -87,6 +101,7 @@ class SecureVaultViewModel(application: Application) : AndroidViewModel(applicat
   fun lockVault() {
     authManager.lock()
     closePreview()
+    _transferProgress.value = TransferProgress()
   }
 
   fun closePreview() {
@@ -155,8 +170,23 @@ class SecureVaultViewModel(application: Application) : AndroidViewModel(applicat
         onSuccess = { authenticatedCipher ->
           val validCipher = authenticatedCipher ?: cipher
           viewModelScope.launch {
-            val result = repository.importFile(uri, validCipher)
+            _transferProgress.value = TransferProgress(
+              isTransferring = true,
+              fileName = "Selected File",
+              actionLabel = "Encrypting & Storing"
+            )
+            val result = repository.importFile(
+              uri = uri,
+              cipher = validCipher,
+              onProgress = { written, total ->
+                _transferProgress.value = _transferProgress.value.copy(
+                  bytesTransferred = written,
+                  totalBytes = total
+                )
+              }
+            )
             _isLoading.value = false
+            _transferProgress.value = TransferProgress()
             result.onSuccess {
               onComplete()
             }.onFailure { err ->
@@ -172,6 +202,66 @@ class SecureVaultViewModel(application: Application) : AndroidViewModel(applicat
     } catch (e: Exception) {
       _isLoading.value = false
       _errorMessage.value = "Encryption initialization error: ${e.message}"
+    }
+  }
+
+  fun exportFile(
+    item: SecureFileItem,
+    destinationUri: Uri,
+    activity: FragmentActivity,
+    onComplete: () -> Unit = {}
+  ) {
+    _isLoading.value = true
+    try {
+      val ivStringToUse = if (item.wrappedDek.isNotEmpty() && item.dekIv.isNotEmpty()) {
+        item.dekIv
+      } else {
+        item.iv
+      }
+      val ivBytes = Base64.decode(ivStringToUse, Base64.NO_WRAP)
+      val cipher = SecureVaultKeyManager.initDecryptCipher(ivBytes)
+
+      authManager.promptBiometric(
+        activity = activity,
+        cipher = cipher,
+        title = "Export & Decrypt File",
+        subtitle = "Confirm biometrics to stream-decrypt to external storage",
+        onSuccess = { authenticatedCipher ->
+          val validCipher = authenticatedCipher ?: cipher
+          viewModelScope.launch {
+            _transferProgress.value = TransferProgress(
+              isTransferring = true,
+              fileName = item.originalFileName,
+              actionLabel = "Decrypting & Exporting"
+            )
+            val result = repository.exportFile(
+              item = item,
+              destinationUri = destinationUri,
+              cipher = validCipher,
+              onProgress = { exported, total ->
+                _transferProgress.value = _transferProgress.value.copy(
+                  bytesTransferred = exported,
+                  totalBytes = total
+                )
+              }
+            )
+            _isLoading.value = false
+            _transferProgress.value = TransferProgress()
+            result.onSuccess {
+              onComplete()
+            }.onFailure { err ->
+              _errorMessage.value = "Failed to export file: ${err.message}"
+            }
+          }
+        },
+        onError = { err ->
+          _isLoading.value = false
+          _errorMessage.value = "Biometric authorization required to export: $err"
+        }
+      )
+    } catch (e: Exception) {
+      _isLoading.value = false
+      _errorMessage.value = "Export initialization error: ${e.message}"
     }
   }
 
