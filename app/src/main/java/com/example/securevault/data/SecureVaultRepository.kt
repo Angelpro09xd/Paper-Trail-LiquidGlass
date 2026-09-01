@@ -9,6 +9,8 @@ import com.example.securevault.model.SecureFileItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -94,14 +96,17 @@ class SecureVaultRepository(
       // Immediately zero out the raw DEK byte array from memory
       rawDekBytes.fill(0)
 
-      // 5. Stream-encrypt content directly to disk via CipherOutputStream with fixed 8KB buffer
+      // 5. Stream-encrypt content directly to disk via CipherOutputStream with high-throughput tiered buffering
       val blobName = UUID.randomUUID().toString()
       val targetBlobFile = File(vaultDir, blobName)
       blobFile = targetBlobFile
 
-      context.contentResolver.openInputStream(uri)?.use { input ->
-        CipherOutputStream(FileOutputStream(targetBlobFile), dekCipher).use { cipherOut ->
-          val buffer = ByteArray(8192)
+      // Adapt buffer size: 64KB for large files to maximize flash storage throughput, 16KB for smaller items
+      val bufferSize = if (fileSize > 5L * 1024 * 1024) 64 * 1024 else 16 * 1024
+
+      context.contentResolver.openInputStream(uri)?.let { BufferedInputStream(it, bufferSize) }?.use { input ->
+        CipherOutputStream(BufferedOutputStream(FileOutputStream(targetBlobFile), bufferSize), dekCipher).use { cipherOut ->
+          val buffer = ByteArray(bufferSize)
           var bytesRead: Int
           while (input.read(buffer).also { bytesRead = it } != -1) {
             cipherOut.write(buffer, 0, bytesRead)
@@ -181,9 +186,12 @@ class SecureVaultRepository(
         var isOversized = false
         var totalRead = 0L
 
-        FileInputStream(blobFile).use { fis ->
+        // Adapt buffer size: 64KB for large files to maximize flash storage throughput, 16KB for smaller items
+        val bufferSize = if (item.fileSizeBytes > 5L * 1024 * 1024) 64 * 1024 else 16 * 1024
+
+        BufferedInputStream(FileInputStream(blobFile), bufferSize).use { fis ->
           CipherInputStream(fis, streamCipher).use { cis ->
-            val buffer = ByteArray(8192)
+            val buffer = ByteArray(bufferSize)
             var bytesRead: Int
             while (cis.read(buffer).also { bytesRead = it } != -1) {
               totalRead += bytesRead

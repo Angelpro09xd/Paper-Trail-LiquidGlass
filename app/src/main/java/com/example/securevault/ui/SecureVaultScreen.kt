@@ -1,5 +1,6 @@
 package com.example.securevault.ui
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -627,11 +628,7 @@ private fun SecureFilePreviewDialog(
 
   val imageBitmap = remember(preview.decryptedBytes) {
     if (isImage && preview.decryptedBytes != null) {
-      try {
-        BitmapFactory.decodeByteArray(preview.decryptedBytes, 0, preview.decryptedBytes.size)?.asImageBitmap()
-      } catch (e: Throwable) {
-        null
-      }
+      decodeSafeSampledBitmap(preview.decryptedBytes)
     } else null
   }
 
@@ -823,5 +820,39 @@ private fun getFileTypeIcon(mimeType: String): ImageVector {
     mimeType.startsWith("text/") || mimeType.contains("document") -> Icons.Default.Description
     mimeType.contains("zip") || mimeType.contains("tar") || mimeType.contains("compressed") -> Icons.Default.FolderZip
     else -> Icons.Default.InsertDriveFile
+  }
+}
+
+private fun decodeSafeSampledBitmap(bytes: ByteArray, maxDim: Int = 1600): androidx.compose.ui.graphics.ImageBitmap? {
+  return try {
+    val boundsOptions = BitmapFactory.Options().apply {
+      inJustDecodeBounds = true
+    }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOptions)
+    val width = boundsOptions.outWidth
+    val height = boundsOptions.outHeight
+    if (width <= 0 || height <= 0) return null
+
+    var inSampleSize = 1
+    if (height > maxDim || width > maxDim) {
+      val halfHeight = height / 2
+      val halfWidth = width / 2
+      while ((halfHeight / inSampleSize) >= maxDim && (halfWidth / inSampleSize) >= maxDim) {
+        inSampleSize *= 2
+      }
+    }
+
+    while ((width / inSampleSize) * (height / inSampleSize) * 4 > 30 * 1024 * 1024) {
+      inSampleSize *= 2
+    }
+
+    val decodeOptions = BitmapFactory.Options().apply {
+      this.inSampleSize = inSampleSize
+      inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions)
+    bitmap?.asImageBitmap()
+  } catch (e: Throwable) {
+    null
   }
 }
