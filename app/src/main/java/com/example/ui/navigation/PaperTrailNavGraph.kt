@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.EnhancedEncryption
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Icon
@@ -22,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -30,6 +32,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.data.TutorialPreferences
+import com.example.securevault.ui.SecureVaultScreen
+import com.example.securevault.ui.SecureVaultViewModel
 import com.example.ui.screens.auth.BiometricLockScreen
 import com.example.ui.screens.capture.CaptureOcrScreen
 import com.example.ui.screens.dashboard.DashboardScreen
@@ -43,6 +47,7 @@ import com.example.ui.screens.vault.VaultViewModel
 sealed class Screen(val route: String, val title: String) {
   object Dashboard : Screen("dashboard", "Dashboard")
   object Vault : Screen("vault", "Vault Ledger")
+  object SecureVault : Screen("secure_vault", "SecureVault")
   object Settings : Screen("settings", "Security")
   object Capture : Screen("capture", "Scan Receipt")
   object Tutorial : Screen("tutorial", "Walkthrough")
@@ -63,7 +68,8 @@ fun androidx.navigation.NavController.navigateToTopLevelDestination(route: Strin
 
 @Composable
 fun PaperTrailAppContent(
-  viewModel: VaultViewModel
+  viewModel: VaultViewModel,
+  secureVaultViewModel: SecureVaultViewModel = viewModel()
 ) {
   val context = LocalContext.current
   val navController = rememberNavController()
@@ -85,12 +91,14 @@ fun PaperTrailAppContent(
     val bottomNavItems = listOf(
       Triple(Screen.Dashboard.route, "Dashboard", Icons.Default.Dashboard),
       Triple(Screen.Vault.route, "Ledger", Icons.Default.ReceiptLong),
+      Triple(Screen.SecureVault.route, "SecureVault", Icons.Default.EnhancedEncryption),
       Triple(Screen.Settings.route, "Security", Icons.Default.Shield)
     )
 
     val showBottomBar = currentRoute in listOf(
       Screen.Dashboard.route,
       Screen.Vault.route,
+      Screen.SecureVault.route,
       Screen.Settings.route
     )
 
@@ -109,6 +117,9 @@ fun PaperTrailAppContent(
                 selected = isSelected,
                 onClick = {
                   if (currentRoute != route) {
+                    if (currentRoute == Screen.SecureVault.route) {
+                      secureVaultViewModel.lockVault()
+                    }
                     navController.navigateToTopLevelDestination(route)
                   }
                 },
@@ -160,6 +171,12 @@ fun PaperTrailAppContent(
             viewModel = viewModel,
             onNavigateToCapture = { navController.navigate(Screen.Capture.route) },
             onNavigateToItemDetail = { id -> navController.navigate(Screen.ItemDetail.createRoute(id)) }
+          )
+        }
+
+        composable(Screen.SecureVault.route) {
+          SecureVaultScreen(
+            viewModel = secureVaultViewModel
           )
         }
 

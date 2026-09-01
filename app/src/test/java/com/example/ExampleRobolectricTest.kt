@@ -74,4 +74,42 @@ class ExampleRobolectricTest {
     val after = com.example.data.TutorialPreferences.hasSeenTutorial(context)
     assertEquals(true, after)
   }
+
+  @Test
+  fun `test secure vault passphrase generation and persistence`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val key1 = com.example.securevault.data.SecureVaultPassphraseManager.getOrCreatePassphrase(context)
+    val key2 = com.example.securevault.data.SecureVaultPassphraseManager.getOrCreatePassphrase(context)
+    assertEquals(32, key1.size)
+    org.junit.Assert.assertArrayEquals(key1, key2)
+  }
+
+  @Test
+  fun `test secure vault auth manager independent lock state`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val authManager = com.example.securevault.security.SecureVaultAuthManager(context)
+    // Starts locked
+    assertEquals(false, authManager.isUnlocked.value)
+    authManager.lock()
+    assertEquals(false, authManager.isUnlocked.value)
+  }
+
+  @Test
+  fun `test secure file item model properties`() {
+    val item = com.example.securevault.model.SecureFileItem(
+      id = 1L,
+      originalFileName = "tax_return_2025.pdf",
+      mimeType = "application/pdf",
+      fileSizeBytes = 204800L,
+      encryptedBlobPath = "1234-uuid-blob",
+      dateAdded = 1700000000000L,
+      iv = "dGVzdF9pdg=="
+    )
+    assertEquals(1L, item.id)
+    assertEquals("tax_return_2025.pdf", item.originalFileName)
+    assertEquals("application/pdf", item.mimeType)
+    assertEquals(204800L, item.fileSizeBytes)
+    assertEquals("1234-uuid-blob", item.encryptedBlobPath)
+    assertEquals("dGVzdF9pdg==", item.iv)
+  }
 }
