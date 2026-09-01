@@ -18,7 +18,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -32,9 +34,12 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.data.TutorialPreferences
+import com.example.data.security.SecurityAuditPreferences
+import com.example.data.security.SecurityIntegrityAuditor
 import com.example.securevault.ui.SecureVaultScreen
 import com.example.securevault.ui.SecureVaultViewModel
 import com.example.ui.screens.auth.BiometricLockScreen
+import com.example.ui.screens.auth.SecurityIntegrityGateScreen
 import com.example.ui.screens.capture.CaptureOcrScreen
 import com.example.ui.screens.dashboard.DashboardScreen
 import com.example.ui.screens.detail.ItemDetailEditScreen
@@ -82,7 +87,19 @@ fun PaperTrailAppContent(
 
   val isUnlocked by viewModel.authManager.isUnlocked.collectAsStateWithLifecycle()
 
-  if (!isUnlocked && viewModel.authManager.isLockConfigured) {
+  val isStrictGateEnabled = remember { SecurityAuditPreferences.isStrictGateEnabled(context) }
+  var integrityReport by remember {
+    mutableStateOf(if (isStrictGateEnabled) SecurityIntegrityAuditor.runFullAudit(context) else null)
+  }
+
+  if (integrityReport != null && integrityReport!!.hasCriticalFailures && isStrictGateEnabled) {
+    SecurityIntegrityGateScreen(
+      initialReport = integrityReport!!,
+      onResolved = { newReport ->
+        integrityReport = newReport
+      }
+    )
+  } else if (!isUnlocked && viewModel.authManager.isLockConfigured) {
     BiometricLockScreen(
       authManager = viewModel.authManager,
       onUnlocked = { /* unlocked state updated in StateFlow */ }

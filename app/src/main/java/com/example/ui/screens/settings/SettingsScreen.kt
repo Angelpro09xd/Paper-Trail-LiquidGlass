@@ -183,6 +183,9 @@ fun SettingsScreen(
         }
       }
 
+      // 1. Hardware & OS Security Integrity Diagnostic Card
+      SecurityIntegrityCard()
+
       // 1. Zero Cloud Commitment Card
       Card(
         modifier = Modifier
