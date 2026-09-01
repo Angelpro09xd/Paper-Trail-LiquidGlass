@@ -5,6 +5,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.data.model.SubscriptionCycle
 import com.example.data.model.VaultItem
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -128,5 +130,33 @@ class ExampleRobolectricTest {
     // Storage encryption check must be present
     val storageItem = report.items.find { it.id == "storage_encryption" }
     org.junit.Assert.assertNotNull(storageItem)
+  }
+
+  @Test
+  fun `test secure vault preview handles oversized file safely`() {
+    val item = com.example.securevault.model.SecureFileItem(
+      id = 2L,
+      originalFileName = "large_archive.zip",
+      mimeType = "application/zip",
+      fileSizeBytes = 100L * 1024 * 1024,
+      encryptedBlobPath = "5678-uuid-blob",
+      dateAdded = 1700000000000L,
+      iv = "dGVzdF9pdg=="
+    )
+    val oversizedPreview = com.example.securevault.ui.SecureVaultPreview(
+      item = item,
+      decryptedBytes = null,
+      isTooLargeToPreview = true
+    )
+    assertEquals(true, oversizedPreview.isTooLargeToPreview)
+    assertNull(oversizedPreview.decryptedBytes)
+
+    val regularPreview = com.example.securevault.ui.SecureVaultPreview(
+      item = item,
+      decryptedBytes = "test content".toByteArray(),
+      isTooLargeToPreview = false
+    )
+    assertEquals(false, regularPreview.isTooLargeToPreview)
+    assertNotNull(regularPreview.decryptedBytes)
   }
 }

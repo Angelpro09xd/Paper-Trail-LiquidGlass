@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -625,7 +626,7 @@ private fun SecureFilePreviewDialog(
       item.mimeType.contains("markdown")
 
   val imageBitmap = remember(preview.decryptedBytes) {
-    if (isImage) {
+    if (isImage && preview.decryptedBytes != null) {
       try {
         BitmapFactory.decodeByteArray(preview.decryptedBytes, 0, preview.decryptedBytes.size)?.asImageBitmap()
       } catch (e: Throwable) {
@@ -635,7 +636,7 @@ private fun SecureFilePreviewDialog(
   }
 
   val textContent = remember(preview.decryptedBytes) {
-    if (isText) {
+    if (isText && preview.decryptedBytes != null) {
       try {
         String(preview.decryptedBytes, Charsets.UTF_8)
       } catch (e: Throwable) {
@@ -684,7 +685,11 @@ private fun SecureFilePreviewDialog(
                 overflow = TextOverflow.Ellipsis
               )
               Text(
-                text = "${formatFileSize(item.fileSizeBytes)} • Decrypted in RAM only",
+                text = if (preview.isTooLargeToPreview) {
+                  "${formatFileSize(item.fileSizeBytes)} • Encrypted Blob on Disk"
+                } else {
+                  "${formatFileSize(item.fileSizeBytes)} • Decrypted in RAM only"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = SecureVaultAmber
               )
@@ -707,7 +712,34 @@ private fun SecureFilePreviewDialog(
             .padding(8.dp),
           contentAlignment = Alignment.Center
         ) {
-          if (imageBitmap != null) {
+          if (preview.isTooLargeToPreview) {
+            Column(
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.Center,
+              modifier = Modifier.padding(16.dp)
+            ) {
+              Icon(
+                imageVector = Icons.Default.WarningAmber,
+                contentDescription = null,
+                modifier = Modifier.size(48.dp),
+                tint = SecureVaultAmber
+              )
+              Spacer(modifier = Modifier.height(12.dp))
+              Text(
+                text = "File Too Large to Preview",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+              )
+              Spacer(modifier = Modifier.height(6.dp))
+              Text(
+                text = "File too large to preview (${formatFileSize(item.fileSizeBytes)}) — stored securely, but preview isn't available for files this size.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                lineHeight = 18.sp
+              )
+            }
+          } else if (imageBitmap != null) {
             Image(
               bitmap = imageBitmap,
               contentDescription = item.originalFileName,
@@ -762,7 +794,7 @@ private fun SecureFilePreviewDialog(
           modifier = Modifier.fillMaxWidth(),
           colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
         ) {
-          Text("Close & Wipe from RAM")
+          Text(if (preview.isTooLargeToPreview) "Close" else "Close & Wipe from RAM")
         }
       }
     }

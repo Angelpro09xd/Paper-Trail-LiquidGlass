@@ -27,19 +27,23 @@ import javax.crypto.Cipher
 
 data class SecureVaultPreview(
   val item: SecureFileItem,
-  val decryptedBytes: ByteArray
+  val decryptedBytes: ByteArray?,
+  val isTooLargeToPreview: Boolean = false
 ) {
   override fun equals(other: Any?): Boolean {
     if (this === other) return true
     if (javaClass != other?.javaClass) return false
     other as SecureVaultPreview
     if (item != other.item) return false
-    return decryptedBytes.contentEquals(other.decryptedBytes)
+    if (isTooLargeToPreview != other.isTooLargeToPreview) return false
+    return (decryptedBytes == null && other.decryptedBytes == null) ||
+        (decryptedBytes != null && other.decryptedBytes != null && decryptedBytes.contentEquals(other.decryptedBytes))
   }
 
   override fun hashCode(): Int {
     var result = item.hashCode()
-    result = 31 * result + decryptedBytes.contentHashCode()
+    result = 31 * result + (decryptedBytes?.contentHashCode() ?: 0)
+    result = 31 * result + isTooLargeToPreview.hashCode()
     return result
   }
 }
@@ -190,8 +194,15 @@ class SecureVaultViewModel(application: Application) : AndroidViewModel(applicat
           viewModelScope.launch {
             val result = repository.decryptFile(item, validCipher)
             _isLoading.value = false
-            result.onSuccess { bytes ->
-              _activePreview.value = SecureVaultPreview(item, bytes)
+            result.onSuccess { decResult ->
+              when (decResult) {
+                is com.example.securevault.data.DecryptionResult.Success -> {
+                  _activePreview.value = SecureVaultPreview(item, decResult.bytes, isTooLargeToPreview = false)
+                }
+                is com.example.securevault.data.DecryptionResult.TooLargeToPreview -> {
+                  _activePreview.value = SecureVaultPreview(item, null, isTooLargeToPreview = true)
+                }
+              }
             }.onFailure { err ->
               _errorMessage.value = "Decryption failed: ${err.message}"
             }
