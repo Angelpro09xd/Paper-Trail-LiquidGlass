@@ -65,6 +65,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -113,6 +114,14 @@ fun CaptureOcrScreen(
   var ocrCompleted by remember { mutableStateOf(false) }
   var ocrMessage by remember { mutableStateOf<String?>(null) }
 
+  DisposableEffect(Unit) {
+    onDispose {
+      if (capturedBitmap?.isRecycled == false) {
+        capturedBitmap?.recycle()
+      }
+    }
+  }
+
   // Form Fields
   var storeName by remember { mutableStateOf("") }
   var amountStr by remember { mutableStateOf("") }
@@ -157,6 +166,9 @@ fun CaptureOcrScreen(
         ocrMessage = null
         val bitmap = ImageFileManager.decodeSampledBitmap(context, tempCameraUri!!)
         if (bitmap != null) {
+          if (capturedBitmap?.isRecycled == false) {
+            capturedBitmap?.recycle()
+          }
           capturedBitmap = bitmap
           val ocrResult = ReceiptOcrProcessor.processImage(bitmap)
           if (ocrResult.isSuccessful && ocrResult.rawText.isNotBlank()) {
@@ -189,6 +201,9 @@ fun CaptureOcrScreen(
         ocrMessage = null
         val bitmap = ImageFileManager.decodeSampledBitmap(context, uri)
         if (bitmap != null) {
+          if (capturedBitmap?.isRecycled == false) {
+            capturedBitmap?.recycle()
+          }
           capturedBitmap = bitmap
           val ocrResult = ReceiptOcrProcessor.processImage(bitmap)
           if (ocrResult.isSuccessful && ocrResult.rawText.isNotBlank()) {

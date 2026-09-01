@@ -28,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,9 +58,9 @@ fun PerforatedReceiptCard(
   onClick: () -> Unit,
   modifier: Modifier = Modifier
 ) {
-  val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
+  val dateFormat = remember { SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()) }
   val dateStr = dateFormat.format(Date(item.purchaseDate))
-  val currencyFmt = NumberFormat.getCurrencyInstance(Locale.US)
+  val currencyFmt = remember { NumberFormat.getCurrencyInstance(Locale.US) }
   val amountStr = currencyFmt.format(item.amount)
 
   Card(

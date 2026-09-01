@@ -5,8 +5,14 @@ import com.example.data.db.AppDatabase
 import com.example.data.notifications.ReminderScheduler
 import com.example.data.repository.VaultRepository
 import com.example.data.security.BiometricAuthManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class PaperTrailApp : Application() {
+
+  private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
   val database: AppDatabase by lazy {
     AppDatabase.getInstance(this)
@@ -22,6 +28,15 @@ class PaperTrailApp : Application() {
 
   override fun onCreate() {
     super.onCreate()
+    // Prewarm database on background thread immediately at process start
+    appScope.launch {
+      try {
+        database.vaultDao()
+      } catch (e: Throwable) {
+        // Fallback or initialization exception handled within AppDatabase.getInstance()
+      }
+    }
+
     try {
       ReminderScheduler.schedulePeriodicReminders(this)
     } catch (e: Throwable) {

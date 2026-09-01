@@ -10,11 +10,13 @@ import com.example.data.model.VaultItem
 import com.example.data.notifications.ReminderScheduler
 import com.example.ui.components.ChartSlice
 import com.example.ui.components.DefaultChartPalette
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.Calendar
@@ -111,11 +113,13 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
       SortOption.AMOUNT_ASC -> filtered.sortedBy { it.amount }
       SortOption.NAME_ASC -> filtered.sortedBy { it.storeName.lowercase() }
     }
-  }.stateIn(
-    scope = viewModelScope,
-    started = SharingStarted.WhileSubscribed(5000),
-    initialValue = emptyList()
-  )
+  }
+    .flowOn(Dispatchers.Default)
+    .stateIn(
+      scope = viewModelScope,
+      started = SharingStarted.WhileSubscribed(5000),
+      initialValue = emptyList()
+    )
 
   // Dashboard calculations
   val dashboardStats: StateFlow<DashboardStats> = allItems.combine(_selectedTab) { items, _ ->
@@ -165,11 +169,13 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
       expiringWarranties = expiringWarranties,
       subscriptionCategorySlices = slices
     )
-  }.stateIn(
-    scope = viewModelScope,
-    started = SharingStarted.WhileSubscribed(5000),
-    initialValue = DashboardStats()
-  )
+  }
+    .flowOn(Dispatchers.Default)
+    .stateIn(
+      scope = viewModelScope,
+      started = SharingStarted.WhileSubscribed(5000),
+      initialValue = DashboardStats()
+    )
 
   fun setSearchQuery(query: String) {
     _searchQuery.value = query
