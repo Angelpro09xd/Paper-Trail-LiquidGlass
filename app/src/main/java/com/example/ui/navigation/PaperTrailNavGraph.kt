@@ -17,7 +17,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -27,11 +29,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.data.TutorialPreferences
 import com.example.ui.screens.auth.BiometricLockScreen
 import com.example.ui.screens.capture.CaptureOcrScreen
 import com.example.ui.screens.dashboard.DashboardScreen
 import com.example.ui.screens.detail.ItemDetailEditScreen
 import com.example.ui.screens.settings.SettingsScreen
+import com.example.ui.screens.tutorial.TutorialScreen
 import com.example.ui.screens.vault.VaultListScreen
 import com.example.ui.screens.vault.VaultTab
 import com.example.ui.screens.vault.VaultViewModel
@@ -41,6 +45,7 @@ sealed class Screen(val route: String, val title: String) {
   object Vault : Screen("vault", "Vault Ledger")
   object Settings : Screen("settings", "Security")
   object Capture : Screen("capture", "Scan Receipt")
+  object Tutorial : Screen("tutorial", "Walkthrough")
   object ItemDetail : Screen("item_detail/{itemId}", "Item Detail") {
     fun createRoute(itemId: Long) = "item_detail/$itemId"
   }
@@ -60,9 +65,14 @@ fun androidx.navigation.NavController.navigateToTopLevelDestination(route: Strin
 fun PaperTrailAppContent(
   viewModel: VaultViewModel
 ) {
+  val context = LocalContext.current
   val navController = rememberNavController()
   val navBackStackEntry by navController.currentBackStackEntryAsState()
   val currentRoute = navBackStackEntry?.destination?.route
+
+  val startDestination = remember {
+    if (TutorialPreferences.hasSeenTutorial(context)) Screen.Dashboard.route else Screen.Tutorial.route
+  }
 
   val isUnlocked by viewModel.authManager.isUnlocked.collectAsStateWithLifecycle()
 
@@ -116,9 +126,22 @@ fun PaperTrailAppContent(
     ) { paddingValues ->
       NavHost(
         navController = navController,
-        startDestination = Screen.Dashboard.route,
+        startDestination = startDestination,
         modifier = Modifier.padding(paddingValues)
       ) {
+        composable(Screen.Tutorial.route) {
+          TutorialScreen(
+            onFinishTutorial = {
+              TutorialPreferences.setTutorialSeen(context, true)
+              if (navController.previousBackStackEntry != null) {
+                navController.popBackStack()
+              } else {
+                navController.navigateToTopLevelDestination(Screen.Dashboard.route)
+              }
+            }
+          )
+        }
+
         composable(Screen.Dashboard.route) {
           DashboardScreen(
             viewModel = viewModel,
@@ -143,7 +166,8 @@ fun PaperTrailAppContent(
         composable(Screen.Settings.route) {
           SettingsScreen(
             viewModel = viewModel,
-            onLockVault = { viewModel.authManager.lock() }
+            onLockVault = { viewModel.authManager.lock() },
+            onNavigateToTutorial = { navController.navigate(Screen.Tutorial.route) }
           )
         }
 

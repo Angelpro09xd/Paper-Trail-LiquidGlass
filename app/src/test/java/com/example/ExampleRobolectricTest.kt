@@ -61,4 +61,17 @@ class ExampleRobolectricTest {
     val daysLeft = item.daysUntilWarrantyExpires(now)
     assertEquals(10L, daysLeft)
   }
+
+  @Test
+  fun `test tutorial preferences default and mutation`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    // Should initially be false
+    val initial = com.example.data.TutorialPreferences.hasSeenTutorial(context)
+    assertEquals(false, initial)
+
+    // Mark as seen
+    com.example.data.TutorialPreferences.setTutorialSeen(context, true)
+    val after = com.example.data.TutorialPreferences.hasSeenTutorial(context)
+    assertEquals(true, after)
+  }
 }
