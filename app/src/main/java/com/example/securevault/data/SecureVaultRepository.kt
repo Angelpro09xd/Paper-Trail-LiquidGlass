@@ -38,6 +38,18 @@ class SecureVaultRepository(
     const val MAX_PREVIEW_SIZE_BYTES = 80L * 1024 * 1024 // 80 MB safety threshold for volatile preview
     private const val DEK_TRANSFORMATION = "AES/GCM/NoPadding"
     private const val GCM_TAG_LENGTH = 128
+    private const val CHUNK_SIZE = 1024 * 1024 // 1 MB chunking eliminates Java heap buffering OOM
+    private val CHUNK_MAGIC = byteArrayOf('S'.code.toByte(), 'V'.code.toByte(), 'C'.code.toByte(), '1'.code.toByte())
+  }
+
+  private fun deriveChunkIv(baseIv: ByteArray, chunkIndex: Long): ByteArray {
+    val iv = baseIv.copyOf()
+    for (i in 0 until 8) {
+      val shift = (7 - i) * 8
+      val byteVal = ((chunkIndex ushr shift) and 0xFF).toByte()
+      iv[4 + i] = (iv[4 + i].toInt() xor byteVal.toInt()).toByte()
+    }
+    return iv
   }
 
   private val vaultDir: File by lazy {
@@ -88,42 +100,63 @@ class SecureVaultRepository(
       val dekWrapIv = cipher.iv
       val dekIvB64 = if (dekWrapIv != null) Base64.encodeToString(dekWrapIv, Base64.NO_WRAP) else ""
 
-      // 4. Initialize software AES-GCM cipher with DEK for high-throughput bulk content stream
-      val dekCipher = Cipher.getInstance(DEK_TRANSFORMATION)
-      dekCipher.init(Cipher.ENCRYPT_MODE, dek)
-      val contentIv = dekCipher.iv
+      // 4. Software AES-GCM base IV generation for chunked streaming
+      val dekCipherForIv = Cipher.getInstance(DEK_TRANSFORMATION)
+      dekCipherForIv.init(Cipher.ENCRYPT_MODE, dek)
+      val contentIv = dekCipherForIv.iv
       val contentIvB64 = Base64.encodeToString(contentIv, Base64.NO_WRAP)
 
       // Immediately zero out the raw DEK byte array from memory
       rawDekBytes.fill(0)
 
-      // 5. Stream-encrypt content directly to disk via CipherOutputStream with high-throughput tiered buffering
+      // 5. Chunk-encrypt content directly to disk: 1MB chunks with individual AES-GCM authentication tags
+      // Memory footprint is constant (~2MB) even for 1GB - 10GB movies or game APKs.
       val blobName = UUID.randomUUID().toString()
       val targetBlobFile = File(vaultDir, blobName)
       blobFile = targetBlobFile
 
-      // Adapt buffer size: 128KB for >50MB files (movies, game APKs), 64KB for >5MB, 16KB for smaller items
-      val bufferSize = when {
-        fileSize > 50L * 1024 * 1024 -> 128 * 1024
-        fileSize > 5L * 1024 * 1024 -> 64 * 1024
-        else -> 16 * 1024
+      var totalBytesWritten = 0L
+      var chunkIndex = 0L
+      val plainBuffer = ByteArray(CHUNK_SIZE)
+
+      FileOutputStream(targetBlobFile).use { fos ->
+        BufferedOutputStream(fos, 64 * 1024).use { out ->
+          // Write format magic header
+          out.write(CHUNK_MAGIC)
+
+          context.contentResolver.openInputStream(uri)?.let { BufferedInputStream(it, 64 * 1024) }?.use { input ->
+            while (true) {
+              var bytesReadThisChunk = 0
+              while (bytesReadThisChunk < CHUNK_SIZE) {
+                val r = input.read(plainBuffer, bytesReadThisChunk, CHUNK_SIZE - bytesReadThisChunk)
+                if (r == -1) break
+                bytesReadThisChunk += r
+              }
+
+              if (bytesReadThisChunk == 0) break // EOF
+
+              val chunkIv = deriveChunkIv(contentIv, chunkIndex)
+              val chunkCipher = Cipher.getInstance(DEK_TRANSFORMATION)
+              chunkCipher.init(Cipher.ENCRYPT_MODE, dek, GCMParameterSpec(GCM_TAG_LENGTH, chunkIv))
+              val cipherBytes = chunkCipher.doFinal(plainBuffer, 0, bytesReadThisChunk)
+
+              val len = cipherBytes.size
+              out.write((len ushr 24) and 0xFF)
+              out.write((len ushr 16) and 0xFF)
+              out.write((len ushr 8) and 0xFF)
+              out.write(len and 0xFF)
+              out.write(cipherBytes)
+
+              totalBytesWritten += bytesReadThisChunk
+              chunkIndex++
+              onProgress(totalBytesWritten, fileSize)
+            }
+            out.flush()
+          } ?: return@withContext Result.failure(IllegalStateException("Could not read file from URI"))
+        }
       }
 
-      var totalBytesWritten = 0L
-      context.contentResolver.openInputStream(uri)?.let { BufferedInputStream(it, bufferSize) }?.use { input ->
-        CipherOutputStream(BufferedOutputStream(FileOutputStream(targetBlobFile), bufferSize), dekCipher).use { cipherOut ->
-          val buffer = ByteArray(bufferSize)
-          var bytesRead: Int
-          while (input.read(buffer).also { bytesRead = it } != -1) {
-            cipherOut.write(buffer, 0, bytesRead)
-            totalBytesWritten += bytesRead
-            onProgress(totalBytesWritten, fileSize)
-          }
-          cipherOut.flush()
-        }
-      } ?: return@withContext Result.failure(IllegalStateException("Could not read file from URI"))
-
-      val actualSize = if (fileSize > 0) fileSize else targetBlobFile.length()
+      val actualSize = if (fileSize > 0) fileSize else totalBytesWritten
 
       // 6. Store metadata with wrapped DEK and respective IVs in the encrypted database
       val item = SecureFileItem(
@@ -164,44 +197,95 @@ class SecureVaultRepository(
         return@withContext Result.failure(IllegalStateException("Encrypted blob file does not exist on disk"))
       }
 
-      val streamCipher: Cipher
       var unwrappedDekBytesToWipe: ByteArray? = null
 
       try {
+        val dekKey: SecretKeySpec?
+        val contentIvBytes: ByteArray?
+        val legacyStreamCipher: Cipher?
+
         if (item.wrappedDek.isNotEmpty()) {
           val wrappedDekBytes = Base64.decode(item.wrappedDek, Base64.NO_WRAP)
           val unwrappedDekBytes = cipher.doFinal(wrappedDekBytes)
           unwrappedDekBytesToWipe = unwrappedDekBytes
-          val dekKey = SecretKeySpec(unwrappedDekBytes, "AES")
-
-          val contentIvBytes = Base64.decode(item.iv, Base64.NO_WRAP)
-          val dekCipher = Cipher.getInstance(DEK_TRANSFORMATION)
-          val spec = GCMParameterSpec(GCM_TAG_LENGTH, contentIvBytes)
-          dekCipher.init(Cipher.DECRYPT_MODE, dekKey, spec)
-          streamCipher = dekCipher
+          dekKey = SecretKeySpec(unwrappedDekBytes, "AES")
+          contentIvBytes = Base64.decode(item.iv, Base64.NO_WRAP)
+          legacyStreamCipher = null
         } else {
-          streamCipher = cipher
-        }
-
-        val bufferSize = when {
-          item.fileSizeBytes > 50L * 1024 * 1024 -> 128 * 1024
-          item.fileSizeBytes > 5L * 1024 * 1024 -> 64 * 1024
-          else -> 16 * 1024
+          dekKey = null
+          contentIvBytes = null
+          legacyStreamCipher = cipher
         }
 
         var totalBytesWritten = 0L
-        context.contentResolver.openOutputStream(destinationUri)?.let { BufferedOutputStream(it, bufferSize) }?.use { output ->
-          BufferedInputStream(FileInputStream(blobFile), bufferSize).use { fis ->
-            CipherInputStream(fis, streamCipher).use { cis ->
-              val buffer = ByteArray(bufferSize)
-              var bytesRead: Int
-              while (cis.read(buffer).also { bytesRead = it } != -1) {
-                output.write(buffer, 0, bytesRead)
-                totalBytesWritten += bytesRead
+
+        context.contentResolver.openOutputStream(destinationUri)?.let { BufferedOutputStream(it, 64 * 1024) }?.use { output ->
+          BufferedInputStream(FileInputStream(blobFile), 64 * 1024).use { bis ->
+            val header = ByteArray(4)
+            bis.mark(4)
+            val headerRead = bis.read(header)
+            val isChunked = headerRead == 4 && header.contentEquals(CHUNK_MAGIC)
+
+            if (isChunked && dekKey != null && contentIvBytes != null) {
+              var chunkIndex = 0L
+              val lenBuffer = ByteArray(4)
+
+              while (true) {
+                var lenRead = 0
+                while (lenRead < 4) {
+                  val r = bis.read(lenBuffer, lenRead, 4 - lenRead)
+                  if (r == -1) break
+                  lenRead += r
+                }
+                if (lenRead < 4) break // EOF
+
+                val cipherLen = ((lenBuffer[0].toInt() and 0xFF) shl 24) or
+                                ((lenBuffer[1].toInt() and 0xFF) shl 16) or
+                                ((lenBuffer[2].toInt() and 0xFF) shl 8) or
+                                (lenBuffer[3].toInt() and 0xFF)
+
+                if (cipherLen <= 0 || cipherLen > CHUNK_SIZE + 1024) {
+                  throw IllegalStateException("Corrupt chunk length: $cipherLen")
+                }
+
+                val cipherBuffer = ByteArray(cipherLen)
+                var cipherRead = 0
+                while (cipherRead < cipherLen) {
+                  val r = bis.read(cipherBuffer, cipherRead, cipherLen - cipherRead)
+                  if (r == -1) throw java.io.EOFException("Unexpected EOF reading cipher chunk")
+                  cipherRead += r
+                }
+
+                val chunkIv = deriveChunkIv(contentIvBytes, chunkIndex)
+                val chunkCipher = Cipher.getInstance(DEK_TRANSFORMATION)
+                chunkCipher.init(Cipher.DECRYPT_MODE, dekKey, GCMParameterSpec(GCM_TAG_LENGTH, chunkIv))
+                val plainBytes = chunkCipher.doFinal(cipherBuffer)
+
+                output.write(plainBytes)
+                totalBytesWritten += plainBytes.size
+                chunkIndex++
                 onProgress(totalBytesWritten, item.fileSizeBytes)
               }
-              output.flush()
+            } else {
+              // Legacy non-chunked fallback
+              bis.reset()
+              val actualStreamCipher: Cipher = legacyStreamCipher ?: run {
+                val spec = GCMParameterSpec(GCM_TAG_LENGTH, contentIvBytes!!)
+                Cipher.getInstance(DEK_TRANSFORMATION).apply {
+                  init(Cipher.DECRYPT_MODE, dekKey!!, spec)
+                }
+              }
+              CipherInputStream(bis, actualStreamCipher).use { cis ->
+                val buffer = ByteArray(64 * 1024)
+                var bytesRead: Int
+                while (cis.read(buffer).also { bytesRead = it } != -1) {
+                  output.write(buffer, 0, bytesRead)
+                  totalBytesWritten += bytesRead
+                  onProgress(totalBytesWritten, item.fileSizeBytes)
+                }
+              }
             }
+            output.flush()
           }
         } ?: return@withContext Result.failure(IllegalStateException("Could not open destination output stream"))
 
@@ -227,51 +311,103 @@ class SecureVaultRepository(
         return@withContext Result.failure(IllegalStateException("Encrypted blob file does not exist on disk"))
       }
 
-      // Check fast path if known metadata size exceeds max preview threshold
       if (item.fileSizeBytes > maxPreviewSizeBytes) {
         return@withContext Result.success(DecryptionResult.TooLargeToPreview(item.fileSizeBytes))
       }
 
-      val streamCipher: Cipher
       var unwrappedDekBytesToWipe: ByteArray? = null
 
       try {
+        val dekKey: SecretKeySpec?
+        val contentIvBytes: ByteArray?
+        val legacyStreamCipher: Cipher?
+
         if (item.wrappedDek.isNotEmpty()) {
-          // 1. Unwrap DEK using the authenticated hardware Keystore cipher
           val wrappedDekBytes = Base64.decode(item.wrappedDek, Base64.NO_WRAP)
           val unwrappedDekBytes = cipher.doFinal(wrappedDekBytes)
           unwrappedDekBytesToWipe = unwrappedDekBytes
-          val dekKey = SecretKeySpec(unwrappedDekBytes, "AES")
-
-          // 2. Initialize software AES-GCM cipher with DEK and content IV for bulk streaming
-          val contentIvBytes = Base64.decode(item.iv, Base64.NO_WRAP)
-          val dekCipher = Cipher.getInstance(DEK_TRANSFORMATION)
-          val spec = GCMParameterSpec(GCM_TAG_LENGTH, contentIvBytes)
-          dekCipher.init(Cipher.DECRYPT_MODE, dekKey, spec)
-          streamCipher = dekCipher
+          dekKey = SecretKeySpec(unwrappedDekBytes, "AES")
+          contentIvBytes = Base64.decode(item.iv, Base64.NO_WRAP)
+          legacyStreamCipher = null
         } else {
-          // Legacy fallback for entries encrypted directly with hardware Keystore
-          streamCipher = cipher
+          dekKey = null
+          contentIvBytes = null
+          legacyStreamCipher = cipher
         }
 
         val baos = ByteArrayOutputStream()
         var isOversized = false
         var totalRead = 0L
 
-        // Adapt buffer size: 64KB for large files to maximize flash storage throughput, 16KB for smaller items
-        val bufferSize = if (item.fileSizeBytes > 5L * 1024 * 1024) 64 * 1024 else 16 * 1024
+        BufferedInputStream(FileInputStream(blobFile), 64 * 1024).use { bis ->
+          val header = ByteArray(4)
+          bis.mark(4)
+          val headerRead = bis.read(header)
+          val isChunked = headerRead == 4 && header.contentEquals(CHUNK_MAGIC)
 
-        BufferedInputStream(FileInputStream(blobFile), bufferSize).use { fis ->
-          CipherInputStream(fis, streamCipher).use { cis ->
-            val buffer = ByteArray(bufferSize)
-            var bytesRead: Int
-            while (cis.read(buffer).also { bytesRead = it } != -1) {
-              totalRead += bytesRead
+          if (isChunked && dekKey != null && contentIvBytes != null) {
+            var chunkIndex = 0L
+            val lenBuffer = ByteArray(4)
+
+            while (true) {
+              var lenRead = 0
+              while (lenRead < 4) {
+                val r = bis.read(lenBuffer, lenRead, 4 - lenRead)
+                if (r == -1) break
+                lenRead += r
+              }
+              if (lenRead < 4) break // EOF
+
+              val cipherLen = ((lenBuffer[0].toInt() and 0xFF) shl 24) or
+                              ((lenBuffer[1].toInt() and 0xFF) shl 16) or
+                              ((lenBuffer[2].toInt() and 0xFF) shl 8) or
+                              (lenBuffer[3].toInt() and 0xFF)
+
+              if (cipherLen <= 0 || cipherLen > CHUNK_SIZE + 1024) {
+                throw IllegalStateException("Corrupt chunk length: $cipherLen")
+              }
+
+              val cipherBuffer = ByteArray(cipherLen)
+              var cipherRead = 0
+              while (cipherRead < cipherLen) {
+                val r = bis.read(cipherBuffer, cipherRead, cipherLen - cipherRead)
+                if (r == -1) throw java.io.EOFException("Unexpected EOF reading chunk")
+                cipherRead += r
+              }
+
+              val chunkIv = deriveChunkIv(contentIvBytes, chunkIndex)
+              val chunkCipher = Cipher.getInstance(DEK_TRANSFORMATION)
+              chunkCipher.init(Cipher.DECRYPT_MODE, dekKey, GCMParameterSpec(GCM_TAG_LENGTH, chunkIv))
+              val plainBytes = chunkCipher.doFinal(cipherBuffer)
+
+              totalRead += plainBytes.size
               if (totalRead > maxPreviewSizeBytes) {
                 isOversized = true
                 break
               }
-              baos.write(buffer, 0, bytesRead)
+              baos.write(plainBytes)
+              chunkIndex++
+            }
+          } else {
+            // Legacy fallback
+            bis.reset()
+            val actualStreamCipher: Cipher = legacyStreamCipher ?: run {
+              val spec = GCMParameterSpec(GCM_TAG_LENGTH, contentIvBytes!!)
+              Cipher.getInstance(DEK_TRANSFORMATION).apply {
+                init(Cipher.DECRYPT_MODE, dekKey!!, spec)
+              }
+            }
+            CipherInputStream(bis, actualStreamCipher).use { cis ->
+              val buffer = ByteArray(64 * 1024)
+              var bytesRead: Int
+              while (cis.read(buffer).also { bytesRead = it } != -1) {
+                totalRead += bytesRead
+                if (totalRead > maxPreviewSizeBytes) {
+                  isOversized = true
+                  break
+                }
+                baos.write(buffer, 0, bytesRead)
+              }
             }
           }
         }
@@ -283,7 +419,6 @@ class SecureVaultRepository(
           Result.success(DecryptionResult.Success(baos.toByteArray()))
         }
       } finally {
-        // Discard and securely zero out unwrapped DEK bytes immediately
         unwrappedDekBytesToWipe?.fill(0)
       }
     } catch (e: Throwable) {
