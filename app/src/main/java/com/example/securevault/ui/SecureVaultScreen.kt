@@ -33,6 +33,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
@@ -41,12 +43,18 @@ import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.RadioButtonChecked
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.ThumbDown
+import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.WarningAmber
@@ -55,9 +63,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -99,9 +110,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.security.IntegrityReport
 import com.example.data.security.SecurityAuditPreferences
 import com.example.data.security.SecurityIntegrityAuditor
+import com.example.securevault.data.VaultStorageLocation
 import com.example.securevault.model.SecureFileItem
 import com.example.ui.screens.auth.SecurityIntegrityGateScreen
 import kotlinx.coroutines.Dispatchers
@@ -111,7 +124,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// Custom accent color for SecureVault isolation branding
 private val SecureVaultAmber = Color(0xFFD97706)
 private val SecureVaultAmberContainer = Color(0xFFFEF3C7)
 private val SecureVaultOnAmberContainer = Color(0xFF92400E)
@@ -119,8 +131,8 @@ private val SecureVaultOnAmberContainer = Color(0xFF92400E)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SecureVaultScreen(
-  viewModel: SecureVaultViewModel,
-  onNavigateBack: () -> Unit = {}
+  onNavigateBack: () -> Unit = {},
+  viewModel: SecureVaultViewModel = viewModel()
 ) {
   val context = LocalContext.current
   val activity = context as? FragmentActivity
@@ -131,11 +143,14 @@ fun SecureVaultScreen(
   val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
   val transferProgress by viewModel.transferProgress.collectAsStateWithLifecycle()
   val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
+  val infoMessage by viewModel.infoMessage.collectAsStateWithLifecycle()
   val activePreview by viewModel.activePreview.collectAsStateWithLifecycle()
+  val storageLocation by viewModel.storageLocation.collectAsStateWithLifecycle()
 
+  // Hardware Security Strict Gate check
   val isStrictGateEnabled = remember { SecurityAuditPreferences.isStrictGateEnabled(context) }
   var integrityReport by remember { mutableStateOf<IntegrityReport?>(null) }
-  var isAuditing by remember { mutableStateOf(isStrictGateEnabled) }
+  var isAuditing by remember { mutableStateOf(false) }
 
   LaunchedEffect(isStrictGateEnabled) {
     if (isStrictGateEnabled) {
@@ -155,6 +170,7 @@ fun SecureVaultScreen(
   val coroutineScope = rememberCoroutineScope()
   var itemToDelete by remember { mutableStateOf<SecureFileItem?>(null) }
   var itemToExport by remember { mutableStateOf<SecureFileItem?>(null) }
+  var showStorageDialog by remember { mutableStateOf(false) }
 
   // Re-lock whenever the screen leaves composition or app is backgrounded
   DisposableEffect(lifecycleOwner) {
@@ -194,6 +210,24 @@ fun SecureVaultScreen(
     itemToExport = null
   }
 
+  // SAF Document Creator for exporting full encrypted vault backup (.vault)
+  val vaultBackupExportLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.CreateDocument("application/octet-stream")
+  ) { uri ->
+    if (uri != null && activity != null) {
+      viewModel.exportVaultBackup(uri, activity)
+    }
+  }
+
+  // SAF Document Picker for restoring full encrypted vault backup (.vault)
+  val vaultBackupRestoreLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.OpenDocument()
+  ) { uri ->
+    if (uri != null && activity != null) {
+      viewModel.restoreVaultBackup(uri, activity)
+    }
+  }
+
   LaunchedEffect(errorMessage) {
     errorMessage?.let { msg ->
       snackbarHostState.showSnackbar(msg)
@@ -201,10 +235,18 @@ fun SecureVaultScreen(
     }
   }
 
-  if (isStrictGateEnabled && integrityReport != null && integrityReport!!.hasCriticalFailures) {
+  LaunchedEffect(infoMessage) {
+    infoMessage?.let { msg ->
+      snackbarHostState.showSnackbar(msg)
+      viewModel.clearInfo()
+    }
+  }
+
+  val activeIntegrityReport = integrityReport
+  if (isStrictGateEnabled && activeIntegrityReport != null && activeIntegrityReport.hasCriticalFailures) {
     // Isolated hardware security failure: Gate SecureVault without impacting the rest of Paper Trail
     SecurityIntegrityGateScreen(
-      initialReport = integrityReport!!,
+      initialReport = activeIntegrityReport,
       onResolved = { newReport ->
         integrityReport = newReport
       },
@@ -241,7 +283,7 @@ fun SecureVaultScreen(
                   fontWeight = FontWeight.Bold
                 )
                 Text(
-                  text = "Isolated Hardware AES-256 Storage",
+                  text = "Hardware AES-256 Storage",
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -249,6 +291,17 @@ fun SecureVaultScreen(
             }
           },
           actions = {
+            IconButton(
+              onClick = { showStorageDialog = true },
+              modifier = Modifier.testTag("securevault_storage_options_button")
+            ) {
+              Icon(
+                imageVector = Icons.Default.Storage,
+                contentDescription = "Storage Location & Backup",
+                tint = SecureVaultAmber
+              )
+            }
+
             IconButton(
               onClick = { viewModel.lockVault() },
               modifier = Modifier.testTag("securevault_lock_button")
@@ -285,14 +338,15 @@ fun SecureVaultScreen(
           .fillMaxSize()
           .padding(paddingValues)
       ) {
-        // Security Status Banner
+        // Security Status & Storage Mode Banner
         Box(
           modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(12.dp))
             .background(SecureVaultAmberContainer)
-            .border(1.dp, SecureVaultAmber.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+            .border(1.dp, SecureVaultAmber.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+            .clickable { showStorageDialog = true }
             .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
           Row(
@@ -300,7 +354,7 @@ fun SecureVaultScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxWidth()
           ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
               Icon(
                 imageVector = Icons.Default.Security,
                 contentDescription = null,
@@ -308,13 +362,23 @@ fun SecureVaultScreen(
                 modifier = Modifier.size(18.dp)
               )
               Spacer(modifier = Modifier.width(8.dp))
-              Text(
-                text = "ENCRYPTED AT REST (AES-GCM)",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = SecureVaultOnAmberContainer,
-                letterSpacing = 0.5.sp
-              )
+              Column {
+                Text(
+                  text = "ENCRYPTED AT REST (AES-GCM)",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = SecureVaultOnAmberContainer,
+                  letterSpacing = 0.5.sp
+                )
+                Text(
+                  text = "Mode: ${storageLocation.title} • Tap to change",
+                  style = MaterialTheme.typography.bodySmall,
+                  fontSize = 11.sp,
+                  color = SecureVaultOnAmberContainer.copy(alpha = 0.85f),
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
+                )
+              }
             }
             Text(
               text = "${secureFiles.size} ${if (secureFiles.size == 1) "file" else "files"}",
@@ -325,7 +389,7 @@ fun SecureVaultScreen(
           }
         }
 
-        // Transfer Progress Banner (for large movies, APKs, and bulk files)
+        // Transfer Progress Banner (for large movies, APKs, migrations, and backups)
         if (transferProgress.isTransferring) {
           Card(
             modifier = Modifier
@@ -384,12 +448,12 @@ fun SecureVaultScreen(
                   horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                   Text(
-                    text = formatFileSize(transferProgress.bytesTransferred),
+                    text = if (transferProgress.totalBytes > 1000) formatFileSize(transferProgress.bytesTransferred) else "${transferProgress.bytesTransferred} items",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                   )
                   Text(
-                    text = formatFileSize(transferProgress.totalBytes),
+                    text = if (transferProgress.totalBytes > 1000) formatFileSize(transferProgress.totalBytes) else "${transferProgress.totalBytes} items",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                   )
@@ -511,6 +575,29 @@ fun SecureVaultScreen(
     }
   }
 
+  // Storage Location & Vault Backup Options Dialog
+  if (showStorageDialog) {
+    StorageSettingsDialog(
+      currentLocation = storageLocation,
+      onSelectLocation = { targetLoc, migrate ->
+        if (activity != null) {
+          viewModel.changeStorageLocation(targetLoc, migrate, activity)
+        }
+        showStorageDialog = false
+      },
+      onExportBackup = {
+        showStorageDialog = false
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
+        vaultBackupExportLauncher.launch("SecureVault_Backup_$timestamp.vault")
+      },
+      onRestoreBackup = {
+        showStorageDialog = false
+        vaultBackupRestoreLauncher.launch(arrayOf("*/*"))
+      },
+      onDismiss = { showStorageDialog = false }
+    )
+  }
+
   // Delete Confirmation Dialog
   if (itemToDelete != null) {
     val file = itemToDelete!!
@@ -552,6 +639,344 @@ fun SecureVaultScreen(
       },
       onDismiss = { viewModel.closePreview() }
     )
+  }
+}
+
+@Composable
+private fun StorageSettingsDialog(
+  currentLocation: VaultStorageLocation,
+  onSelectLocation: (target: VaultStorageLocation, migrate: Boolean) -> Unit,
+  onExportBackup: () -> Unit,
+  onRestoreBackup: () -> Unit,
+  onDismiss: () -> Unit
+) {
+  var selectedLocation by remember { mutableStateOf(currentLocation) }
+  var migrateExisting by remember { mutableStateOf(true) }
+
+  Dialog(onDismissRequest = onDismiss) {
+    Surface(
+      modifier = Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(20.dp))
+        .border(1.dp, SecureVaultAmber.copy(alpha = 0.5f), RoundedCornerShape(20.dp)),
+      color = MaterialTheme.colorScheme.surface,
+      tonalElevation = 6.dp
+    ) {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(20.dp)
+          .verticalScroll(rememberScrollState())
+      ) {
+        // Header
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+              imageVector = Icons.Default.Storage,
+              contentDescription = null,
+              tint = SecureVaultAmber,
+              modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+              Text(
+                text = "Vault Storage & Backup",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+              )
+              Text(
+                text = "Choose how cipher blobs are stored",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+          }
+          IconButton(onClick = onDismiss) {
+            Icon(Icons.Default.Close, contentDescription = "Close")
+          }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Info notice about encryption
+        Box(
+          modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(10.dp)
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+              imageVector = Icons.Default.Security,
+              contentDescription = null,
+              tint = SecureVaultAmber,
+              modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+              text = "Regardless of storage location, all files are strictly AES-256-GCM encrypted and cannot be decrypted without this app's hardware key.",
+              style = MaterialTheme.typography.bodySmall,
+              fontSize = 11.sp,
+              lineHeight = 15.sp,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Storage Mode Options with Pros & Cons
+        Text(
+          text = "Storage Locations",
+          style = MaterialTheme.typography.labelLarge,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        VaultStorageLocation.entries.forEach { loc ->
+          StorageLocationOptionCard(
+            location = loc,
+            isSelected = selectedLocation == loc,
+            isCurrent = currentLocation == loc,
+            onSelect = { selectedLocation = loc }
+          )
+          Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        // Migrate option if location changed
+        if (selectedLocation != currentLocation) {
+          Spacer(modifier = Modifier.height(4.dp))
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+              .fillMaxWidth()
+              .clip(RoundedCornerShape(8.dp))
+              .clickable { migrateExisting = !migrateExisting }
+              .padding(horizontal = 4.dp, vertical = 2.dp)
+          ) {
+            Checkbox(
+              checked = migrateExisting,
+              onCheckedChange = { migrateExisting = it },
+              colors = CheckboxDefaults.colors(checkedColor = SecureVaultAmber)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+              text = "Move existing encrypted files to new storage location",
+              style = MaterialTheme.typography.bodySmall,
+              fontWeight = FontWeight.SemiBold
+            )
+          }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Button(
+          onClick = {
+            onSelectLocation(selectedLocation, migrateExisting && (selectedLocation != currentLocation))
+          },
+          modifier = Modifier.fillMaxWidth(),
+          colors = ButtonDefaults.buttonColors(containerColor = SecureVaultAmber)
+        ) {
+          Text(if (selectedLocation != currentLocation) "Apply & Switch Location" else "Keep Current Location", fontWeight = FontWeight.Bold)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Backup & Disaster Recovery Section
+        Text(
+          text = "Encrypted Vault Archive (.vault)",
+          style = MaterialTheme.typography.labelLarge,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+          text = "Export your entire vault to a single encrypted archive file that survives Clear Data or uninstalls. Save to Google Drive, PC, or SD card.",
+          style = MaterialTheme.typography.bodySmall,
+          fontSize = 11.sp,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          lineHeight = 15.sp
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          OutlinedButton(
+            onClick = onExportBackup,
+            modifier = Modifier.weight(1f)
+          ) {
+            Icon(Icons.Default.Backup, contentDescription = null, modifier = Modifier.size(16.dp), tint = SecureVaultAmber)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Export .vault", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = SecureVaultAmber)
+          }
+
+          OutlinedButton(
+            onClick = onRestoreBackup,
+            modifier = Modifier.weight(1f)
+          ) {
+            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Restore .vault", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun StorageLocationOptionCard(
+  location: VaultStorageLocation,
+  isSelected: Boolean,
+  isCurrent: Boolean,
+  onSelect: () -> Unit
+) {
+  var showDetails by remember { mutableStateOf(isSelected) }
+
+  Card(
+    modifier = Modifier
+      .fillMaxWidth()
+      .clip(RoundedCornerShape(12.dp))
+      .border(
+        width = if (isSelected) 2.dp else 1.dp,
+        color = if (isSelected) SecureVaultAmber else MaterialTheme.colorScheme.outlineVariant,
+        shape = RoundedCornerShape(12.dp)
+      )
+      .clickable {
+        onSelect()
+        showDetails = !showDetails
+      },
+    colors = CardDefaults.cardColors(
+      containerColor = if (isSelected) SecureVaultAmberContainer.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surface
+    )
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(12.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          modifier = Modifier.weight(1f)
+        ) {
+          Icon(
+            imageVector = if (isSelected) Icons.Default.RadioButtonChecked else Icons.Default.RadioButtonUnchecked,
+            contentDescription = null,
+            tint = if (isSelected) SecureVaultAmber else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+          )
+          Spacer(modifier = Modifier.width(8.dp))
+          Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Text(
+                text = location.title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+              )
+              if (isCurrent) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Box(
+                  modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(SecureVaultAmber)
+                    .padding(horizontal = 5.dp, vertical = 1.dp)
+                ) {
+                  Text("ACTIVE", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold)
+                }
+              }
+            }
+            Text(
+              text = location.badge,
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.SemiBold,
+              color = SecureVaultAmber
+            )
+          }
+        }
+      }
+
+      Spacer(modifier = Modifier.height(6.dp))
+
+      Text(
+        text = location.description,
+        style = MaterialTheme.typography.bodySmall,
+        fontSize = 11.sp,
+        lineHeight = 15.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+      )
+
+      // Pros and Cons breakdown
+      Spacer(modifier = Modifier.height(8.dp))
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .clip(RoundedCornerShape(8.dp))
+          .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+          .padding(8.dp)
+      ) {
+        // Pros
+        Row(verticalAlignment = Alignment.Top) {
+          Icon(
+            imageVector = Icons.Default.ThumbUp,
+            contentDescription = null,
+            tint = Color(0xFF16A34A),
+            modifier = Modifier.size(14.dp).padding(top = 2.dp)
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Column {
+            location.pros.forEach { pro ->
+              Text(
+                text = "• $pro",
+                style = MaterialTheme.typography.bodySmall,
+                fontSize = 10.5.sp,
+                lineHeight = 14.sp,
+                color = MaterialTheme.colorScheme.onSurface
+              )
+            }
+          }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // Cons
+        Row(verticalAlignment = Alignment.Top) {
+          Icon(
+            imageVector = Icons.Default.ThumbDown,
+            contentDescription = null,
+            tint = Color(0xFFDC2626),
+            modifier = Modifier.size(14.dp).padding(top = 2.dp)
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Column {
+            location.cons.forEach { con ->
+              Text(
+                text = "• $con",
+                style = MaterialTheme.typography.bodySmall,
+                fontSize = 10.5.sp,
+                lineHeight = 14.sp,
+                color = MaterialTheme.colorScheme.onSurface
+              )
+            }
+          }
+        }
+      }
+    }
   }
 }
 

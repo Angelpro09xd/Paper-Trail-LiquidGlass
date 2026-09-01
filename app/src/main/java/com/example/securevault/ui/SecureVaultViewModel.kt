@@ -12,6 +12,7 @@ import com.example.data.security.SecurityIntegrityAuditor
 import com.example.securevault.data.SecureVaultDatabase
 import com.example.securevault.data.SecureVaultKeyManager
 import com.example.securevault.data.SecureVaultRepository
+import com.example.securevault.data.VaultStorageLocation
 import com.example.securevault.model.SecureFileItem
 import com.example.securevault.security.SecureVaultAuthManager
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +31,7 @@ data class TransferProgress(
   val fileName: String = "",
   val bytesTransferred: Long = 0L,
   val totalBytes: Long = 0L,
-  val actionLabel: String = "" // "Encrypting & Importing" or "Decrypting & Exporting"
+  val actionLabel: String = "" // "Encrypting & Importing", "Decrypting & Exporting", "Migrating Storage", "Creating Backup"
 ) {
   val progressFraction: Float
     get() = if (totalBytes > 0) (bytesTransferred.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f) else 0f
@@ -74,6 +75,9 @@ class SecureVaultViewModel(application: Application) : AndroidViewModel(applicat
     SecureVaultAuthManager(application)
   }
 
+  val storageLocation: StateFlow<VaultStorageLocation> = repository.storagePreferences.currentLocation
+  val customFolderUriString: StateFlow<String?> = repository.storagePreferences.customFolderUriString
+
   val secureFiles: StateFlow<List<SecureFileItem>> = repository.allFiles
     .flowOn(Dispatchers.Default)
     .stateIn(
@@ -91,11 +95,18 @@ class SecureVaultViewModel(application: Application) : AndroidViewModel(applicat
   private val _errorMessage = MutableStateFlow<String?>(null)
   val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
+  private val _infoMessage = MutableStateFlow<String?>(null)
+  val infoMessage: StateFlow<String?> = _infoMessage.asStateFlow()
+
   private val _activePreview = MutableStateFlow<SecureVaultPreview?>(null)
   val activePreview: StateFlow<SecureVaultPreview?> = _activePreview.asStateFlow()
 
   fun clearError() {
     _errorMessage.value = null
+  }
+
+  fun clearInfo() {
+    _infoMessage.value = null
   }
 
   fun lockVault() {
@@ -151,6 +162,146 @@ class SecureVaultViewModel(application: Application) : AndroidViewModel(applicat
         _isLoading.value = false
         _errorMessage.value = "Failed to start biometric authentication: ${e.message}"
       }
+    }
+  }
+
+  fun changeStorageLocation(
+    targetLocation: VaultStorageLocation,
+    migrateExisting: Boolean,
+    activity: FragmentActivity,
+    onSuccess: (Int) -> Unit = {}
+  ) {
+    if (!migrateExisting) {
+      repository.storagePreferences.setStorageLocation(targetLocation)
+      _infoMessage.value = "Storage location updated to: ${targetLocation.title}"
+      onSuccess(0)
+      return
+    }
+
+    _isLoading.value = true
+    viewModelScope.launch {
+      _transferProgress.value = TransferProgress(
+        isTransferring = true,
+        fileName = "Migrating Vault Files",
+        actionLabel = "Moving Blobs to ${targetLocation.title}"
+      )
+      val result = repository.migrateStorage(
+        targetLocation = targetLocation,
+        onProgress = { count, total ->
+          _transferProgress.value = _transferProgress.value.copy(
+            bytesTransferred = count.toLong(),
+            totalBytes = total.toLong()
+          )
+        }
+      )
+      _isLoading.value = false
+      _transferProgress.value = TransferProgress()
+      result.onSuccess { count ->
+        _infoMessage.value = "Successfully migrated $count files to ${targetLocation.title}"
+        onSuccess(count)
+      }.onFailure { err ->
+        _errorMessage.value = "Migration failed: ${err.message}"
+      }
+    }
+  }
+
+  fun exportVaultBackup(
+    destinationUri: Uri,
+    activity: FragmentActivity,
+    onComplete: (Int) -> Unit = {}
+  ) {
+    _isLoading.value = true
+    try {
+      val cipher = SecureVaultKeyManager.initEncryptCipher()
+      authManager.promptBiometric(
+        activity = activity,
+        cipher = cipher,
+        title = "Export Vault Backup",
+        subtitle = "Confirm biometrics to generate an encrypted .vault backup archive",
+        onSuccess = {
+          viewModelScope.launch {
+            _transferProgress.value = TransferProgress(
+              isTransferring = true,
+              fileName = "Encrypted Vault Archive (.vault)",
+              actionLabel = "Exporting Backup Archive"
+            )
+            val result = repository.exportVaultBackup(
+              destinationUri = destinationUri,
+              onProgress = { count, total ->
+                _transferProgress.value = _transferProgress.value.copy(
+                  bytesTransferred = count.toLong(),
+                  totalBytes = total.toLong()
+                )
+              }
+            )
+            _isLoading.value = false
+            _transferProgress.value = TransferProgress()
+            result.onSuccess { count ->
+              _infoMessage.value = "Vault backup exported successfully ($count files included)"
+              onComplete(count)
+            }.onFailure { err ->
+              _errorMessage.value = "Failed to export vault backup: ${err.message}"
+            }
+          }
+        },
+        onError = { err ->
+          _isLoading.value = false
+          _errorMessage.value = "Biometric authorization required to export backup: $err"
+        }
+      )
+    } catch (e: Exception) {
+      _isLoading.value = false
+      _errorMessage.value = "Backup export error: ${e.message}"
+    }
+  }
+
+  fun restoreVaultBackup(
+    sourceUri: Uri,
+    activity: FragmentActivity,
+    onComplete: (Int) -> Unit = {}
+  ) {
+    _isLoading.value = true
+    try {
+      val cipher = SecureVaultKeyManager.initEncryptCipher()
+      authManager.promptBiometric(
+        activity = activity,
+        cipher = cipher,
+        title = "Restore Vault Backup",
+        subtitle = "Confirm biometrics to restore encrypted archive into SecureVault",
+        onSuccess = {
+          viewModelScope.launch {
+            _transferProgress.value = TransferProgress(
+              isTransferring = true,
+              fileName = "Restoring Vault Archive",
+              actionLabel = "Importing Files from Backup"
+            )
+            val result = repository.restoreVaultBackup(
+              sourceUri = sourceUri,
+              onProgress = { count, total ->
+                _transferProgress.value = _transferProgress.value.copy(
+                  bytesTransferred = count.toLong(),
+                  totalBytes = total.toLong()
+                )
+              }
+            )
+            _isLoading.value = false
+            _transferProgress.value = TransferProgress()
+            result.onSuccess { count ->
+              _infoMessage.value = "Restored $count files successfully from backup archive"
+              onComplete(count)
+            }.onFailure { err ->
+              _errorMessage.value = "Failed to restore vault backup: ${err.message}"
+            }
+          }
+        },
+        onError = { err ->
+          _isLoading.value = false
+          _errorMessage.value = "Biometric authorization required to restore backup: $err"
+        }
+      )
+    } catch (e: Exception) {
+      _isLoading.value = false
+      _errorMessage.value = "Backup restore error: ${e.message}"
     }
   }
 

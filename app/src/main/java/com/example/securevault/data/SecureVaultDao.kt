@@ -13,6 +13,9 @@ interface SecureVaultDao {
   @Query("SELECT * FROM secure_files ORDER BY dateAdded DESC")
   fun getAllFiles(): Flow<List<SecureFileItem>>
 
+  @Query("SELECT * FROM secure_files ORDER BY dateAdded DESC")
+  suspend fun getAllFilesSync(): List<SecureFileItem>
+
   @Query("SELECT * FROM secure_files WHERE id = :id")
   suspend fun getFileById(id: Long): SecureFileItem?
 
