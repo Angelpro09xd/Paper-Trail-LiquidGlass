@@ -5,12 +5,14 @@ import android.util.Log
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.securevault.model.SecureFileItem
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 
 @Database(
   entities = [SecureFileItem::class],
-  version = 1,
+  version = 2,
   exportSchema = false
 )
 abstract class SecureVaultDatabase : RoomDatabase() {
@@ -20,6 +22,13 @@ abstract class SecureVaultDatabase : RoomDatabase() {
     private const val TAG = "SecureVaultDatabase"
     private const val ENCRYPTED_DB_NAME = "securevault_encrypted.db"
     private const val PLAINTEXT_DB_NAME = "securevault_plain.db"
+
+    val MIGRATION_1_2 = object : Migration(1, 2) {
+      override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE secure_files ADD COLUMN wrappedDek TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE secure_files ADD COLUMN dekIv TEXT NOT NULL DEFAULT ''")
+      }
+    }
 
     @Volatile
     var isEncryptionFallbackActive: Boolean = false
@@ -56,6 +65,7 @@ abstract class SecureVaultDatabase : RoomDatabase() {
             ENCRYPTED_DB_NAME
           )
             .openHelperFactory(factory)
+            .addMigrations(MIGRATION_1_2)
             .fallbackToDestructiveMigration()
             .build()
 
@@ -80,6 +90,7 @@ abstract class SecureVaultDatabase : RoomDatabase() {
         SecureVaultDatabase::class.java,
         PLAINTEXT_DB_NAME
       )
+        .addMigrations(MIGRATION_1_2)
         .fallbackToDestructiveMigration()
         .build()
 

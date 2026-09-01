@@ -97,7 +97,7 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `test secure file item model properties`() {
+  fun `test secure file item model properties with envelope encryption fields`() {
     val item = com.example.securevault.model.SecureFileItem(
       id = 1L,
       originalFileName = "tax_return_2025.pdf",
@@ -105,14 +105,64 @@ class ExampleRobolectricTest {
       fileSizeBytes = 204800L,
       encryptedBlobPath = "1234-uuid-blob",
       dateAdded = 1700000000000L,
-      iv = "dGVzdF9pdg=="
+      iv = "Y29udGVudEl2",
+      wrappedDek = "d3JhcHBlZERlaw==",
+      dekIv = "ZGVrV3JhcEl2"
     )
     assertEquals(1L, item.id)
     assertEquals("tax_return_2025.pdf", item.originalFileName)
     assertEquals("application/pdf", item.mimeType)
     assertEquals(204800L, item.fileSizeBytes)
     assertEquals("1234-uuid-blob", item.encryptedBlobPath)
-    assertEquals("dGVzdF9pdg==", item.iv)
+    assertEquals("Y29udGVudEl2", item.iv)
+    assertEquals("d3JhcHBlZERlaw==", item.wrappedDek)
+    assertEquals("ZGVrV3JhcEl2", item.dekIv)
+  }
+
+  @Test
+  fun `test secure vault envelope encryption and unwrap roundtrip`() {
+    kotlinx.coroutines.runBlocking {
+      val context = ApplicationProvider.getApplicationContext<Context>()
+      val db = com.example.securevault.data.SecureVaultDatabase.getInstance(context)
+      val repo = com.example.securevault.data.SecureVaultRepository(db.secureVaultDao(), context)
+
+      // Create a sample temp file to import
+      val sampleText = "Confidential Financial Statement - Envelope Encrypted"
+      val tempFile = java.io.File(context.cacheDir, "sample_doc.txt").apply {
+        writeText(sampleText)
+      }
+      val uri = android.net.Uri.fromFile(tempFile)
+
+      val encryptCipher = com.example.securevault.data.SecureVaultKeyManager.initEncryptCipher()
+      val importResult = repo.importFile(uri, encryptCipher)
+      org.junit.Assert.assertTrue("Import should succeed", importResult.isSuccess)
+      val savedItem = importResult.getOrThrow()
+
+      org.junit.Assert.assertTrue("wrappedDek must not be empty", savedItem.wrappedDek.isNotEmpty())
+      org.junit.Assert.assertTrue("dekIv must not be empty", savedItem.dekIv.isNotEmpty())
+      org.junit.Assert.assertTrue("iv (content IV) must not be empty", savedItem.iv.isNotEmpty())
+
+      // Decrypt using unwrapping Keystore decrypt cipher initialized with dekIv
+      val dekIvBytes = android.util.Base64.decode(savedItem.dekIv, android.util.Base64.NO_WRAP)
+      val decryptCipher = com.example.securevault.data.SecureVaultKeyManager.initDecryptCipher(dekIvBytes)
+
+      val decResult = repo.decryptFile(savedItem, decryptCipher)
+      org.junit.Assert.assertTrue("Decryption should succeed", decResult.isSuccess)
+
+      when (val res = decResult.getOrThrow()) {
+        is com.example.securevault.data.DecryptionResult.Success -> {
+          val decryptedText = String(res.bytes, Charsets.UTF_8)
+          assertEquals(sampleText, decryptedText)
+        }
+        is com.example.securevault.data.DecryptionResult.TooLargeToPreview -> {
+          org.junit.Assert.fail("Small test file should not be marked too large")
+        }
+      }
+
+      // Cleanup
+      repo.deleteFile(savedItem)
+      tempFile.delete()
+    }
   }
 
   @Test

@@ -17,6 +17,9 @@ import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.CipherInputStream
 import javax.crypto.CipherOutputStream
+import javax.crypto.KeyGenerator
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 sealed interface DecryptionResult {
   data class Success(val bytes: ByteArray) : DecryptionResult
@@ -31,6 +34,8 @@ class SecureVaultRepository(
 
   companion object {
     const val MAX_PREVIEW_SIZE_BYTES = 80L * 1024 * 1024 // 80 MB safety threshold for volatile preview
+    private const val DEK_TRANSFORMATION = "AES/GCM/NoPadding"
+    private const val GCM_TAG_LENGTH = 128
   }
 
   private val vaultDir: File by lazy {
@@ -69,17 +74,33 @@ class SecureVaultRepository(
 
       val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
 
-      // 2. Capture IV from initialized cipher before streaming write
-      val iv = cipher.iv
-      val ivB64 = Base64.encodeToString(iv, Base64.NO_WRAP)
+      // 2. Generate a random 256-bit software AES Data Encryption Key (DEK)
+      val keyGen = KeyGenerator.getInstance("AES").apply { init(256) }
+      val dek = keyGen.generateKey()
+      val rawDekBytes = dek.encoded
 
-      // 3. Save ciphertext directly to disk via CipherOutputStream with a fixed small buffer (constant memory)
+      // 3. Wrap (encrypt) the DEK using the hardware Keystore-backed cipher
+      val wrappedDekBytes = cipher.doFinal(rawDekBytes)
+      val wrappedDekB64 = Base64.encodeToString(wrappedDekBytes, Base64.NO_WRAP)
+      val dekWrapIv = cipher.iv
+      val dekIvB64 = if (dekWrapIv != null) Base64.encodeToString(dekWrapIv, Base64.NO_WRAP) else ""
+
+      // 4. Initialize software AES-GCM cipher with DEK for high-throughput bulk content stream
+      val dekCipher = Cipher.getInstance(DEK_TRANSFORMATION)
+      dekCipher.init(Cipher.ENCRYPT_MODE, dek)
+      val contentIv = dekCipher.iv
+      val contentIvB64 = Base64.encodeToString(contentIv, Base64.NO_WRAP)
+
+      // Immediately zero out the raw DEK byte array from memory
+      rawDekBytes.fill(0)
+
+      // 5. Stream-encrypt content directly to disk via CipherOutputStream with fixed 8KB buffer
       val blobName = UUID.randomUUID().toString()
       val targetBlobFile = File(vaultDir, blobName)
       blobFile = targetBlobFile
 
       context.contentResolver.openInputStream(uri)?.use { input ->
-        CipherOutputStream(FileOutputStream(targetBlobFile), cipher).use { cipherOut ->
+        CipherOutputStream(FileOutputStream(targetBlobFile), dekCipher).use { cipherOut ->
           val buffer = ByteArray(8192)
           var bytesRead: Int
           while (input.read(buffer).also { bytesRead = it } != -1) {
@@ -91,19 +112,21 @@ class SecureVaultRepository(
 
       val actualSize = if (fileSize > 0) fileSize else targetBlobFile.length()
 
-      // 4. Store metadata in the encrypted SecureVault database
+      // 6. Store metadata with wrapped DEK and respective IVs in the encrypted database
       val item = SecureFileItem(
         originalFileName = fileName,
         mimeType = mimeType,
         fileSizeBytes = actualSize,
         encryptedBlobPath = blobName,
         dateAdded = System.currentTimeMillis(),
-        iv = ivB64
+        iv = contentIvB64,
+        wrappedDek = wrappedDekB64,
+        dekIv = dekIvB64
       )
 
       val generatedId = dao.insertFile(item)
       val savedItem = item.copy(id = generatedId)
-      Log.i(TAG, "Successfully imported and encrypted file $fileName ($actualSize bytes) into SecureVault")
+      Log.i(TAG, "Successfully imported and envelope-encrypted file $fileName ($actualSize bytes) into SecureVault")
       Result.success(savedItem)
     } catch (e: Throwable) {
       blobFile?.let {
@@ -132,30 +155,56 @@ class SecureVaultRepository(
         return@withContext Result.success(DecryptionResult.TooLargeToPreview(item.fileSizeBytes))
       }
 
-      val baos = ByteArrayOutputStream()
-      var isOversized = false
-      var totalRead = 0L
+      val streamCipher: Cipher
+      var unwrappedDekBytesToWipe: ByteArray? = null
 
-      FileInputStream(blobFile).use { fis ->
-        CipherInputStream(fis, cipher).use { cis ->
-          val buffer = ByteArray(8192)
-          var bytesRead: Int
-          while (cis.read(buffer).also { bytesRead = it } != -1) {
-            totalRead += bytesRead
-            if (totalRead > maxPreviewSizeBytes) {
-              isOversized = true
-              break
+      try {
+        if (item.wrappedDek.isNotEmpty()) {
+          // 1. Unwrap DEK using the authenticated hardware Keystore cipher
+          val wrappedDekBytes = Base64.decode(item.wrappedDek, Base64.NO_WRAP)
+          val unwrappedDekBytes = cipher.doFinal(wrappedDekBytes)
+          unwrappedDekBytesToWipe = unwrappedDekBytes
+          val dekKey = SecretKeySpec(unwrappedDekBytes, "AES")
+
+          // 2. Initialize software AES-GCM cipher with DEK and content IV for bulk streaming
+          val contentIvBytes = Base64.decode(item.iv, Base64.NO_WRAP)
+          val dekCipher = Cipher.getInstance(DEK_TRANSFORMATION)
+          val spec = GCMParameterSpec(GCM_TAG_LENGTH, contentIvBytes)
+          dekCipher.init(Cipher.DECRYPT_MODE, dekKey, spec)
+          streamCipher = dekCipher
+        } else {
+          // Legacy fallback for entries encrypted directly with hardware Keystore
+          streamCipher = cipher
+        }
+
+        val baos = ByteArrayOutputStream()
+        var isOversized = false
+        var totalRead = 0L
+
+        FileInputStream(blobFile).use { fis ->
+          CipherInputStream(fis, streamCipher).use { cis ->
+            val buffer = ByteArray(8192)
+            var bytesRead: Int
+            while (cis.read(buffer).also { bytesRead = it } != -1) {
+              totalRead += bytesRead
+              if (totalRead > maxPreviewSizeBytes) {
+                isOversized = true
+                break
+              }
+              baos.write(buffer, 0, bytesRead)
             }
-            baos.write(buffer, 0, bytesRead)
           }
         }
-      }
 
-      if (isOversized) {
-        val reportedSize = if (item.fileSizeBytes > 0) item.fileSizeBytes else totalRead
-        Result.success(DecryptionResult.TooLargeToPreview(reportedSize))
-      } else {
-        Result.success(DecryptionResult.Success(baos.toByteArray()))
+        if (isOversized) {
+          val reportedSize = if (item.fileSizeBytes > 0) item.fileSizeBytes else totalRead
+          Result.success(DecryptionResult.TooLargeToPreview(reportedSize))
+        } else {
+          Result.success(DecryptionResult.Success(baos.toByteArray()))
+        }
+      } finally {
+        // Discard and securely zero out unwrapped DEK bytes immediately
+        unwrappedDekBytesToWipe?.fill(0)
       }
     } catch (e: Throwable) {
       Log.e(TAG, "Decryption failed for item ${item.id}: ${e.message}", e)

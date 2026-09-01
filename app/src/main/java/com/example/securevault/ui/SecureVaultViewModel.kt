@@ -181,7 +181,12 @@ class SecureVaultViewModel(application: Application) : AndroidViewModel(applicat
   ) {
     _isLoading.value = true
     try {
-      val ivBytes = Base64.decode(item.iv, Base64.NO_WRAP)
+      val ivStringToUse = if (item.wrappedDek.isNotEmpty() && item.dekIv.isNotEmpty()) {
+        item.dekIv
+      } else {
+        item.iv
+      }
+      val ivBytes = Base64.decode(ivStringToUse, Base64.NO_WRAP)
       val cipher = SecureVaultKeyManager.initDecryptCipher(ivBytes)
 
       authManager.promptBiometric(

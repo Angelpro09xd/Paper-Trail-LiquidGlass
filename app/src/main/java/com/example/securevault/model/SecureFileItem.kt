@@ -12,5 +12,7 @@ data class SecureFileItem(
   val fileSizeBytes: Long,
   val encryptedBlobPath: String,
   val dateAdded: Long = System.currentTimeMillis(),
-  val iv: String
+  val iv: String,
+  val wrappedDek: String = "",
+  val dekIv: String = ""
 )
