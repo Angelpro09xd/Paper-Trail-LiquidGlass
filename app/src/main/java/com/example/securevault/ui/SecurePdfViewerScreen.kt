@@ -79,7 +79,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.securevault.model.SecureFileItem
-import com.example.securevault.pdf.SharedMemoryPdfSource
+import com.example.securevault.pdf.MemFdPdfSource
 import com.example.ui.theme.PaperTrailMotion
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -103,7 +103,7 @@ fun SecurePdfViewerScreen(
   BackHandler(onBack = onBack)
 
   val coroutineScope = rememberCoroutineScope()
-  var pdfSource by remember { mutableStateOf<SharedMemoryPdfSource?>(null) }
+  var pdfSource by remember { mutableStateOf<MemFdPdfSource?>(null) }
   var pdfRenderer by remember { mutableStateOf<PdfRenderer?>(null) }
   var pageCount by remember { mutableStateOf(0) }
   var initError by remember { mutableStateOf<String?>(null) }
@@ -132,7 +132,7 @@ fun SecurePdfViewerScreen(
     }
   }
 
-  // Initialize SharedMemory and PdfRenderer
+  // Initialize MemFd and PdfRenderer
   LaunchedEffect(decryptedBytes) {
     if (decryptedBytes == null || decryptedBytes.isEmpty()) {
       initError = "No decrypted PDF data available."
@@ -142,7 +142,7 @@ fun SecurePdfViewerScreen(
 
     withContext(Dispatchers.Default) {
       try {
-        val source = SharedMemoryPdfSource.create(decryptedBytes)
+        val source = MemFdPdfSource.create(decryptedBytes)
         val renderer = PdfRenderer(source.parcelFileDescriptor)
         pdfSource = source
         pdfRenderer = renderer
@@ -524,7 +524,7 @@ fun SecurePdfViewerScreen(
                 )
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
-                  text = "In-Memory PDF (SharedMemory) • Zero Disk Trace",
+                  text = "In-Memory PDF (POSIX memfd) • Zero Disk Trace",
                   style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                   color = SecureVaultAmber,
                   fontSize = 11.sp
