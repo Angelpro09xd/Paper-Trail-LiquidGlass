@@ -8,6 +8,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -660,10 +664,26 @@ fun QuickActionButton(
   onClick: () -> Unit,
   modifier: Modifier = Modifier
 ) {
+  val interactionSource = androidx.compose.runtime.remember { MutableInteractionSource() }
+  val isPressed by interactionSource.collectIsPressedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (isPressed) com.example.ui.theme.PaperTrailMotion.PRESS_SCALE_DOWN else 1f,
+    animationSpec = com.example.ui.theme.PaperTrailMotion.pressScaleSpec(),
+    label = "press_scale"
+  )
+
   Card(
     modifier = modifier
+      .graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+      }
       .clip(RoundedCornerShape(12.dp))
-      .clickable(onClick = onClick),
+      .clickable(
+        interactionSource = interactionSource,
+        indication = androidx.compose.foundation.LocalIndication.current,
+        onClick = onClick
+      ),
     colors = CardDefaults.cardColors(containerColor = backgroundColor)
   ) {
     Row(

@@ -2,6 +2,10 @@ package com.example.ui.screens.detail
 
 import android.app.DatePickerDialog
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -248,11 +252,26 @@ fun ItemDetailEditScreen(
     ) {
       // 1. Photo Preview Card
       if (!item.imagePath.isNullOrEmpty() && File(item.imagePath).exists()) {
+        val interactionSource = androidx.compose.runtime.remember { MutableInteractionSource() }
+        val isPressed by interactionSource.collectIsPressedAsState()
+        val scale by animateFloatAsState(
+          targetValue = if (isPressed) com.example.ui.theme.PaperTrailMotion.PRESS_SCALE_DOWN else 1f,
+          animationSpec = com.example.ui.theme.PaperTrailMotion.pressScaleSpec(),
+          label = "press_scale"
+        )
         Card(
           modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer {
+              scaleX = scale
+              scaleY = scale
+            }
             .clip(RoundedCornerShape(12.dp))
-            .clickable { showFullPhotoDialog = true }
+            .clickable(
+              interactionSource = interactionSource,
+              indication = androidx.compose.foundation.LocalIndication.current,
+              onClick = { showFullPhotoDialog = true }
+            )
             .testTag("receipt_image_preview"),
           colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {

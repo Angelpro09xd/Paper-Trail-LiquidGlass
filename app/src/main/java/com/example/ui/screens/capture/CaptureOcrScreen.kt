@@ -483,7 +483,7 @@ fun CaptureOcrScreen(
           .fillMaxWidth()
           .clip(RoundedCornerShape(12.dp))
           .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-          .animateContentSize(),
+          .animateContentSize(animationSpec = com.example.ui.theme.PaperTrailMotion.expressiveExpand()),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
       ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -566,7 +566,7 @@ fun CaptureOcrScreen(
           .fillMaxWidth()
           .clip(RoundedCornerShape(12.dp))
           .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-          .animateContentSize(),
+          .animateContentSize(animationSpec = com.example.ui.theme.PaperTrailMotion.expressiveExpand()),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
       ) {
         Column(modifier = Modifier.padding(16.dp)) {

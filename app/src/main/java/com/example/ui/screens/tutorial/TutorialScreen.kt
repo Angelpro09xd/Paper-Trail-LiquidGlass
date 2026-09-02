@@ -41,6 +41,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -252,15 +253,22 @@ fun TutorialScreen(
         ) {
           repeat(tutorialPages.size) { index ->
             val isSelected = pagerState.currentPage == index
+            val width by androidx.compose.animation.core.animateDpAsState(
+                targetValue = if (isSelected) 24.dp else 8.dp,
+                animationSpec = com.example.ui.theme.PaperTrailMotion.expressiveExpand(),
+                label = "indicator_width"
+            )
+            val color by androidx.compose.animation.animateColorAsState(
+                targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                animationSpec = com.example.ui.theme.PaperTrailMotion.expressiveCollapse(),
+                label = "indicator_color"
+            )
             Box(
               modifier = Modifier
                 .height(8.dp)
-                .width(if (isSelected) 24.dp else 8.dp)
+                .width(width)
                 .clip(CircleShape)
-                .background(
-                  if (isSelected) MaterialTheme.colorScheme.primary
-                  else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-                )
+                .background(color)
             )
           }
         }

@@ -2,14 +2,19 @@ package com.example.ui.screens.settings
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import com.example.ui.theme.PaperTrailMotion
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -143,7 +148,7 @@ fun SecurityIntegrityCard(
       .fillMaxWidth()
       .clip(RoundedCornerShape(12.dp))
       .border(1.dp, overallColor.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-      .animateContentSize(animationSpec = tween(180))
+      .animateContentSize(animationSpec = PaperTrailMotion.expressiveExpand())
       .testTag("security_integrity_diagnostic_card"),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
   ) {
@@ -282,12 +287,27 @@ private fun IntegrityItemRow(
     IntegrityStatus.OPTIONAL_ABSENT -> Triple(Color.Gray, Icons.Default.Info, "INFO")
   }
 
+  val interactionSource = remember { MutableInteractionSource() }
+  val isPressed by interactionSource.collectIsPressedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (isPressed) PaperTrailMotion.PRESS_SCALE_DOWN else 1f,
+    animationSpec = PaperTrailMotion.pressScaleSpec(),
+    label = "press_scale"
+  )
+
   Column(
     modifier = Modifier
       .fillMaxWidth()
+      .graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+      }
       .clip(RoundedCornerShape(8.dp))
       .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-      .clickable { onToggleExpand() }
+      .clickable(
+        interactionSource = interactionSource,
+        indication = androidx.compose.foundation.LocalIndication.current
+      ) { onToggleExpand() }
       .padding(10.dp)
       .testTag("integrity_row_${item.id}")
   ) {
@@ -335,8 +355,8 @@ private fun IntegrityItemRow(
 
     AnimatedVisibility(
       visible = isExpanded,
-      enter = expandVertically(animationSpec = tween(180)) + fadeIn(animationSpec = tween(140)),
-      exit = shrinkVertically(animationSpec = tween(180)) + fadeOut(animationSpec = tween(120))
+      enter = expandVertically(animationSpec = PaperTrailMotion.expressiveExpand()) + fadeIn(animationSpec = PaperTrailMotion.fadeIn),
+      exit = shrinkVertically(animationSpec = PaperTrailMotion.expressiveCollapse()) + fadeOut(animationSpec = PaperTrailMotion.fadeOut)
     ) {
       Column(
         modifier = Modifier

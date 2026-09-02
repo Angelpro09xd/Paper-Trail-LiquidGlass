@@ -1,6 +1,11 @@
 package com.example.ui.components
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import com.example.ui.theme.PaperTrailMotion
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,6 +34,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,12 +69,28 @@ fun PerforatedReceiptCard(
   val currencyFmt = remember { NumberFormat.getCurrencyInstance(Locale.US) }
   val amountStr = currencyFmt.format(item.amount)
 
+  val interactionSource = remember { MutableInteractionSource() }
+  val isPressed by interactionSource.collectIsPressedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (isPressed) PaperTrailMotion.PRESS_SCALE_DOWN else 1f,
+    animationSpec = PaperTrailMotion.pressScaleSpec(),
+    label = "press_scale"
+  )
+
   Card(
     modifier = modifier
       .fillMaxWidth()
+      .graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+      }
       .clip(RoundedCornerShape(12.dp))
       .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-      .clickable(onClick = onClick)
+      .clickable(
+        interactionSource = interactionSource,
+        indication = androidx.compose.foundation.LocalIndication.current,
+        onClick = onClick
+      )
       .testTag("vault_item_card_${item.id}"),
     colors = CardDefaults.cardColors(
       containerColor = MaterialTheme.colorScheme.surface
@@ -78,7 +100,7 @@ fun PerforatedReceiptCard(
     Column(
       modifier = Modifier
         .fillMaxWidth()
-        .animateContentSize()
+        .animateContentSize(animationSpec = PaperTrailMotion.expressiveExpand())
     ) {
       // Top Sawtooth / Perforated strip header
       ReceiptPerforatedHeader()

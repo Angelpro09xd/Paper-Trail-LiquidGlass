@@ -5,6 +5,10 @@ import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
@@ -927,16 +931,32 @@ private fun StorageLocationOptionCard(
   onPickCustomFolder: () -> Unit = {},
   onSelect: () -> Unit
 ) {
+  val interactionSource = androidx.compose.runtime.remember { MutableInteractionSource() }
+  val isPressed by interactionSource.collectIsPressedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (isPressed) com.example.ui.theme.PaperTrailMotion.PRESS_SCALE_DOWN else 1f,
+    animationSpec = com.example.ui.theme.PaperTrailMotion.pressScaleSpec(),
+    label = "press_scale"
+  )
+
   Card(
     modifier = Modifier
       .fillMaxWidth()
+      .graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+      }
       .clip(RoundedCornerShape(12.dp))
       .border(
         width = if (isSelected) 2.dp else 1.dp,
         color = if (isSelected) SecureVaultAmber else MaterialTheme.colorScheme.outlineVariant,
         shape = RoundedCornerShape(12.dp)
       )
-      .clickable { onSelect() },
+      .clickable(
+        interactionSource = interactionSource,
+        indication = androidx.compose.foundation.LocalIndication.current,
+        onClick = onSelect
+      ),
     colors = CardDefaults.cardColors(
       containerColor = if (isSelected) SecureVaultAmberContainer.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surface
     )
@@ -1214,12 +1234,28 @@ private fun SecureFileCard(
     getFileTypeIcon(item.mimeType)
   }
 
+  val interactionSource = androidx.compose.runtime.remember { MutableInteractionSource() }
+  val isPressed by interactionSource.collectIsPressedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (isPressed) com.example.ui.theme.PaperTrailMotion.PRESS_SCALE_DOWN else 1f,
+    animationSpec = com.example.ui.theme.PaperTrailMotion.pressScaleSpec(),
+    label = "press_scale"
+  )
+
   Card(
     modifier = Modifier
       .fillMaxWidth()
+      .graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+      }
       .clip(RoundedCornerShape(14.dp))
       .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(14.dp))
-      .clickable { onPreview() }
+      .clickable(
+        interactionSource = interactionSource,
+        indication = androidx.compose.foundation.LocalIndication.current,
+        onClick = onPreview
+      )
       .testTag("secure_file_card_${item.id}"),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
   ) {

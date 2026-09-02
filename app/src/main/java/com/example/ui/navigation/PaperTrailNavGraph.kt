@@ -140,9 +140,19 @@ fun PaperTrailAppContent(
       NavHost(
         navController = navController,
         startDestination = startDestination,
-        modifier = Modifier.padding(paddingValues)
+        modifier = Modifier.padding(paddingValues),
+        enterTransition = { androidx.compose.animation.fadeIn(com.example.ui.theme.PaperTrailMotion.fadeIn) },
+        exitTransition = { androidx.compose.animation.fadeOut(com.example.ui.theme.PaperTrailMotion.fadeOut) },
+        popEnterTransition = { androidx.compose.animation.fadeIn(com.example.ui.theme.PaperTrailMotion.fadeIn) },
+        popExitTransition = { androidx.compose.animation.fadeOut(com.example.ui.theme.PaperTrailMotion.fadeOut) }
       ) {
-        composable(Screen.Tutorial.route) {
+        composable(
+          route = Screen.Tutorial.route,
+          enterTransition = { androidx.compose.animation.slideInHorizontally(animationSpec = com.example.ui.theme.PaperTrailMotion.screenEnter()) { it } + androidx.compose.animation.fadeIn(com.example.ui.theme.PaperTrailMotion.fadeIn) },
+          exitTransition = { androidx.compose.animation.slideOutHorizontally(animationSpec = com.example.ui.theme.PaperTrailMotion.screenExit()) { -it / 4 } + androidx.compose.animation.fadeOut(com.example.ui.theme.PaperTrailMotion.fadeOut) },
+          popEnterTransition = { androidx.compose.animation.slideInHorizontally(animationSpec = com.example.ui.theme.PaperTrailMotion.screenEnter()) { -it / 4 } + androidx.compose.animation.fadeIn(com.example.ui.theme.PaperTrailMotion.fadeIn) },
+          popExitTransition = { androidx.compose.animation.slideOutHorizontally(animationSpec = com.example.ui.theme.PaperTrailMotion.screenExit()) { it } + androidx.compose.animation.fadeOut(com.example.ui.theme.PaperTrailMotion.fadeOut) }
+        ) {
           TutorialScreen(
             onFinishTutorial = {
               TutorialPreferences.setTutorialSeen(context, true)
@@ -195,7 +205,13 @@ fun PaperTrailAppContent(
           )
         }
 
-        composable(Screen.Capture.route) {
+        composable(
+          route = Screen.Capture.route,
+          enterTransition = { androidx.compose.animation.slideInHorizontally(animationSpec = com.example.ui.theme.PaperTrailMotion.screenEnter()) { it } + androidx.compose.animation.fadeIn(com.example.ui.theme.PaperTrailMotion.fadeIn) },
+          exitTransition = { androidx.compose.animation.slideOutHorizontally(animationSpec = com.example.ui.theme.PaperTrailMotion.screenExit()) { -it / 4 } + androidx.compose.animation.fadeOut(com.example.ui.theme.PaperTrailMotion.fadeOut) },
+          popEnterTransition = { androidx.compose.animation.slideInHorizontally(animationSpec = com.example.ui.theme.PaperTrailMotion.screenEnter()) { -it / 4 } + androidx.compose.animation.fadeIn(com.example.ui.theme.PaperTrailMotion.fadeIn) },
+          popExitTransition = { androidx.compose.animation.slideOutHorizontally(animationSpec = com.example.ui.theme.PaperTrailMotion.screenExit()) { it } + androidx.compose.animation.fadeOut(com.example.ui.theme.PaperTrailMotion.fadeOut) }
+        ) {
           CaptureOcrScreen(
             viewModel = viewModel,
             onNavigateBack = { navController.popBackStack() },
@@ -209,7 +225,11 @@ fun PaperTrailAppContent(
 
         composable(
           route = Screen.ItemDetail.route,
-          arguments = listOf(navArgument("itemId") { type = NavType.LongType })
+          arguments = listOf(navArgument("itemId") { type = NavType.LongType }),
+          enterTransition = { androidx.compose.animation.slideInHorizontally(animationSpec = com.example.ui.theme.PaperTrailMotion.screenEnter()) { it } + androidx.compose.animation.fadeIn(com.example.ui.theme.PaperTrailMotion.fadeIn) },
+          exitTransition = { androidx.compose.animation.slideOutHorizontally(animationSpec = com.example.ui.theme.PaperTrailMotion.screenExit()) { -it / 4 } + androidx.compose.animation.fadeOut(com.example.ui.theme.PaperTrailMotion.fadeOut) },
+          popEnterTransition = { androidx.compose.animation.slideInHorizontally(animationSpec = com.example.ui.theme.PaperTrailMotion.screenEnter()) { -it / 4 } + androidx.compose.animation.fadeIn(com.example.ui.theme.PaperTrailMotion.fadeIn) },
+          popExitTransition = { androidx.compose.animation.slideOutHorizontally(animationSpec = com.example.ui.theme.PaperTrailMotion.screenExit()) { it } + androidx.compose.animation.fadeOut(com.example.ui.theme.PaperTrailMotion.fadeOut) }
         ) { backStackEntry ->
           val itemId = backStackEntry.arguments?.getLong("itemId") ?: 0L
           ItemDetailEditScreen(
