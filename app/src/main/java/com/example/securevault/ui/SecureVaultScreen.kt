@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Security
@@ -151,6 +152,7 @@ fun SecureVaultScreen(
   val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
   val infoMessage by viewModel.infoMessage.collectAsStateWithLifecycle()
   val activePreview by viewModel.activePreview.collectAsStateWithLifecycle()
+  val activeMediaPlayback by viewModel.activeMediaPlayback.collectAsStateWithLifecycle()
   val storageLocation by viewModel.storageLocation.collectAsStateWithLifecycle()
   val customFolderUri by viewModel.customFolderUriString.collectAsStateWithLifecycle()
 
@@ -614,7 +616,11 @@ fun SecureVaultScreen(
                 item = item,
                 onPreview = {
                   activity?.let { act ->
-                    viewModel.previewFile(item, act)
+                    if (item.mimeType.startsWith("video/") || item.mimeType.startsWith("audio/")) {
+                      viewModel.playMediaFile(item, act)
+                    } else {
+                      viewModel.previewFile(item, act)
+                    }
                   }
                 },
                 onExport = {
@@ -710,6 +716,17 @@ fun SecureVaultScreen(
         onDismiss = { viewModel.closePreview() }
       )
     }
+  }
+
+  // In-Memory Streaming Decrypted Media Player (ExoPlayer + Custom Media3 DataSource)
+  if (activeMediaPlayback != null) {
+    val mediaState = activeMediaPlayback!!
+    SecureMediaPlayerScreen(
+      item = mediaState.item,
+      authorizedCipher = mediaState.cipher,
+      repository = viewModel.repository,
+      onBack = { viewModel.closeMediaPlayer() }
+    )
   }
 
   // Real-Time Crypto Security Terminal Bottom Sheet
@@ -1331,13 +1348,14 @@ private fun SecureFileCard(
         )
       }
 
+      val isMedia = item.mimeType.startsWith("video/") || item.mimeType.startsWith("audio/")
       IconButton(
         onClick = onPreview,
         modifier = Modifier.size(36.dp)
       ) {
         Icon(
-          imageVector = Icons.Default.Visibility,
-          contentDescription = "Preview file",
+          imageVector = if (isMedia) Icons.Default.PlayArrow else Icons.Default.Visibility,
+          contentDescription = if (isMedia) "Play media" else "Preview file",
           tint = MaterialTheme.colorScheme.primary,
           modifier = Modifier.size(20.dp)
         )

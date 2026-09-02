@@ -37,6 +37,11 @@ data class TransferProgress(
     get() = if (totalBytes > 0) (bytesTransferred.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f) else 0f
 }
 
+data class SecureVaultMediaPlayerState(
+  val item: SecureFileItem,
+  val cipher: Cipher
+)
+
 data class SecureVaultPreview(
   val item: SecureFileItem,
   val decryptedBytes: ByteArray?,
@@ -101,6 +106,9 @@ class SecureVaultViewModel(application: Application) : AndroidViewModel(applicat
   private val _activePreview = MutableStateFlow<SecureVaultPreview?>(null)
   val activePreview: StateFlow<SecureVaultPreview?> = _activePreview.asStateFlow()
 
+  private val _activeMediaPlayback = MutableStateFlow<SecureVaultMediaPlayerState?>(null)
+  val activeMediaPlayback: StateFlow<SecureVaultMediaPlayerState?> = _activeMediaPlayback.asStateFlow()
+
   fun clearError() {
     _errorMessage.value = null
   }
@@ -134,11 +142,16 @@ class SecureVaultViewModel(application: Application) : AndroidViewModel(applicat
   fun lockVault() {
     authManager.lock()
     closePreview()
+    closeMediaPlayer()
     _transferProgress.value = TransferProgress()
   }
 
   fun closePreview() {
     _activePreview.value = null
+  }
+
+  fun closeMediaPlayer() {
+    _activeMediaPlayback.value = null
   }
 
   fun unlockVault(
@@ -487,10 +500,48 @@ class SecureVaultViewModel(application: Application) : AndroidViewModel(applicat
     }
   }
 
+  fun playMediaFile(
+    item: SecureFileItem,
+    activity: FragmentActivity
+  ) {
+    _isLoading.value = true
+    try {
+      val ivStringToUse = if (item.wrappedDek.isNotEmpty() && item.dekIv.isNotEmpty()) {
+        item.dekIv
+      } else {
+        item.iv
+      }
+      val ivBytes = Base64.decode(ivStringToUse, Base64.NO_WRAP)
+      val cipher = SecureVaultKeyManager.initDecryptCipher(ivBytes)
+
+      authManager.promptBiometric(
+        activity = activity,
+        cipher = cipher,
+        title = "Play Secure Media",
+        subtitle = "Confirm biometrics to authorize real-time stream decryption",
+        onSuccess = { authenticatedCipher ->
+          _isLoading.value = false
+          val validCipher = authenticatedCipher ?: cipher
+          _activeMediaPlayback.value = SecureVaultMediaPlayerState(item, validCipher)
+        },
+        onError = { err ->
+          _isLoading.value = false
+          _errorMessage.value = "Biometric authorization required to play media: $err"
+        }
+      )
+    } catch (e: Exception) {
+      _isLoading.value = false
+      _errorMessage.value = "Playback initialization error: ${e.message}"
+    }
+  }
+
   fun deleteFile(item: SecureFileItem) {
     viewModelScope.launch {
       if (_activePreview.value?.item?.id == item.id) {
         closePreview()
+      }
+      if (_activeMediaPlayback.value?.item?.id == item.id) {
+        closeMediaPlayer()
       }
       repository.deleteFile(item)
     }

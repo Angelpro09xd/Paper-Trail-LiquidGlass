@@ -69,21 +69,30 @@ class SecureVaultRepository(
 
   companion object {
     const val MAX_PREVIEW_SIZE_BYTES = 80L * 1024 * 1024 // 80 MB safety threshold for volatile preview
-    private const val DEK_TRANSFORMATION = "AES/GCM/NoPadding"
-    private const val GCM_TAG_LENGTH = 128
-    private const val CHUNK_SIZE = 1024 * 1024 // 1 MB chunking eliminates Java heap buffering OOM
-    private val CHUNK_MAGIC = byteArrayOf('S'.code.toByte(), 'V'.code.toByte(), 'C'.code.toByte(), '1'.code.toByte())
-    private val BACKUP_MAGIC = byteArrayOf('S'.code.toByte(), 'V'.code.toByte(), 'B'.code.toByte(), '1'.code.toByte())
+    const val DEK_TRANSFORMATION = "AES/GCM/NoPadding"
+    const val GCM_TAG_LENGTH = 128
+    const val CHUNK_SIZE = 1024 * 1024 // 1 MB chunking eliminates Java heap buffering OOM
+    val CHUNK_MAGIC = byteArrayOf('S'.code.toByte(), 'V'.code.toByte(), 'C'.code.toByte(), '1'.code.toByte())
+    val BACKUP_MAGIC = byteArrayOf('S'.code.toByte(), 'V'.code.toByte(), 'B'.code.toByte(), '1'.code.toByte())
+
+    fun deriveChunkIv(baseIv: ByteArray, chunkIndex: Long): ByteArray {
+      val iv = baseIv.copyOf()
+      for (i in 0 until 8) {
+        val shift = (7 - i) * 8
+        val byteVal = ((chunkIndex ushr shift) and 0xFF).toByte()
+        iv[4 + i] = (iv[4 + i].toInt() xor byteVal.toInt()).toByte()
+      }
+      return iv
+    }
   }
 
-  private fun deriveChunkIv(baseIv: ByteArray, chunkIndex: Long): ByteArray {
-    val iv = baseIv.copyOf()
-    for (i in 0 until 8) {
-      val shift = (7 - i) * 8
-      val byteVal = ((chunkIndex ushr shift) and 0xFF).toByte()
-      iv[4 + i] = (iv[4 + i].toInt() xor byteVal.toInt()).toByte()
+  fun unwrapDek(item: SecureFileItem, cipher: Cipher): ByteArray? {
+    if (item.wrappedDek.isNotEmpty()) {
+      CryptoLogger.hardware("KEYSTORE_UNWRAP", "Unwrapping DEK with Android Keystore Hardware Key (AES-256)...")
+      val wrappedDekBytes = Base64.decode(item.wrappedDek, Base64.NO_WRAP)
+      return cipher.doFinal(wrappedDekBytes)
     }
-    return iv
+    return null
   }
 
   fun getCustomFolderDocument(): DocumentFile? {
