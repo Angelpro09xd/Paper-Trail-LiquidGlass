@@ -689,18 +689,27 @@ fun SecureVaultScreen(
     )
   }
 
-  // In-Memory Decryption Preview Dialog
+  // In-Memory Decryption Preview
   if (activePreview != null) {
     val preview = activePreview!!
-    SecureFilePreviewDialog(
-      preview = preview,
-      onExport = {
-        itemToExport = preview.item
-        viewModel.closePreview()
-        fileExportLauncher.launch(preview.item.originalFileName)
-      },
-      onDismiss = { viewModel.closePreview() }
-    )
+    val isImage = preview.item.mimeType.startsWith("image/")
+    if (isImage && !preview.isTooLargeToPreview && preview.decryptedBytes != null) {
+      SecureImageViewerScreen(
+        item = preview.item,
+        decryptedBytes = preview.decryptedBytes,
+        onBack = { viewModel.closePreview() }
+      )
+    } else {
+      SecureFilePreviewDialog(
+        preview = preview,
+        onExport = {
+          itemToExport = preview.item
+          viewModel.closePreview()
+          fileExportLauncher.launch(preview.item.originalFileName)
+        },
+        onDismiss = { viewModel.closePreview() }
+      )
+    }
   }
 
   // Real-Time Crypto Security Terminal Bottom Sheet
