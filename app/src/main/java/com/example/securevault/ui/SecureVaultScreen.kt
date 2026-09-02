@@ -699,8 +699,17 @@ fun SecureVaultScreen(
   if (activePreview != null) {
     val preview = activePreview!!
     val isImage = preview.item.mimeType.startsWith("image/")
+    val isPdf = preview.item.mimeType.equals("application/pdf", ignoreCase = true) ||
+        preview.item.originalFileName.endsWith(".pdf", ignoreCase = true)
+
     if (isImage && !preview.isTooLargeToPreview && preview.decryptedBytes != null) {
       SecureImageViewerScreen(
+        item = preview.item,
+        decryptedBytes = preview.decryptedBytes,
+        onBack = { viewModel.closePreview() }
+      )
+    } else if (isPdf && !preview.isTooLargeToPreview && preview.decryptedBytes != null) {
+      SecurePdfViewerScreen(
         item = preview.item,
         decryptedBytes = preview.decryptedBytes,
         onBack = { viewModel.closePreview() }
