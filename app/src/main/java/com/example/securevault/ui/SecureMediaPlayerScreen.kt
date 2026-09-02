@@ -1,5 +1,9 @@
 package com.example.securevault.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -36,6 +40,8 @@ import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.EnhancedEncryption
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -72,6 +78,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -101,10 +110,49 @@ fun SecureMediaPlayerScreen(
   onBack: () -> Unit,
   modifier: Modifier = Modifier
 ) {
-  BackHandler(onBack = onBack)
-
   val context = LocalContext.current
   val isVideo = remember(item.mimeType) { item.mimeType.startsWith("video/") }
+
+  var isFullscreen by remember { mutableStateOf(false) }
+
+  fun setFullscreen(enable: Boolean) {
+    isFullscreen = enable
+    val act = context.findActivity() ?: return
+    val window = act.window ?: return
+    val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+    if (enable) {
+      act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+      insetsController.hide(WindowInsetsCompat.Type.systemBars())
+      insetsController.systemBarsBehavior =
+        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    } else {
+      act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+      insetsController.show(WindowInsetsCompat.Type.systemBars())
+    }
+  }
+
+  // Back-press: exit fullscreen first if active, otherwise navigate back
+  BackHandler {
+    if (isFullscreen) {
+      setFullscreen(false)
+    } else {
+      onBack()
+    }
+  }
+
+  // Ensure orientation and system bars are unconditionally restored on exit
+  DisposableEffect(Unit) {
+    onDispose {
+      val act = context.findActivity()
+      if (act != null) {
+        act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        act.window?.let { window ->
+          WindowCompat.getInsetsController(window, window.decorView)
+            .show(WindowInsetsCompat.Type.systemBars())
+        }
+      }
+    }
+  }
 
   var isPlaying by remember { mutableStateOf(false) }
   var currentPositionMs by remember { mutableLongStateOf(0L) }
@@ -427,68 +475,113 @@ fun SecureMediaPlayerScreen(
         }
       }
 
-      // Top App Bar Overlay
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .align(Alignment.TopCenter)
-          .background(Color(0xCC000000))
-          .statusBarsPadding()
-          .padding(horizontal = 8.dp, vertical = 8.dp)
-      ) {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          verticalAlignment = Alignment.CenterVertically
+      // Top App Bar Overlay / Controls
+      if (!isFullscreen) {
+        Box(
+          modifier = Modifier
+            .fillMaxWidth()
+            .align(Alignment.TopCenter)
+            .background(Color(0xCC000000))
+            .statusBarsPadding()
+            .padding(horizontal = 8.dp, vertical = 8.dp)
         ) {
-          val backInteractionSource = remember { MutableInteractionSource() }
-          val isBackPressed by backInteractionSource.collectIsPressedAsState()
-          val backScale by animateFloatAsState(
-            targetValue = if (isBackPressed) PaperTrailMotion.PRESS_SCALE_DOWN else 1f,
-            animationSpec = PaperTrailMotion.pressScaleSpec(),
-            label = "player_back_press_scale"
-          )
-
-          IconButton(
-            onClick = onBack,
-            interactionSource = backInteractionSource,
-            modifier = Modifier
-              .graphicsLayer {
-                scaleX = backScale
-                scaleY = backScale
-              }
-              .testTag("media_player_back_button")
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
           ) {
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-              contentDescription = "Back to SecureVault",
-              tint = Color.White
+            val backInteractionSource = remember { MutableInteractionSource() }
+            val isBackPressed by backInteractionSource.collectIsPressedAsState()
+            val backScale by animateFloatAsState(
+              targetValue = if (isBackPressed) PaperTrailMotion.PRESS_SCALE_DOWN else 1f,
+              animationSpec = PaperTrailMotion.pressScaleSpec(),
+              label = "player_back_press_scale"
             )
-          }
 
-          Spacer(modifier = Modifier.width(6.dp))
-
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = item.originalFileName,
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold,
-              color = Color.White,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(
+              onClick = onBack,
+              interactionSource = backInteractionSource,
+              modifier = Modifier
+                .graphicsLayer {
+                  scaleX = backScale
+                  scaleY = backScale
+                }
+                .testTag("media_player_back_button")
+            ) {
               Icon(
-                imageVector = Icons.Default.EnhancedEncryption,
-                contentDescription = null,
-                tint = SecureVaultAmber,
-                modifier = Modifier.size(12.dp)
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back to SecureVault",
+                tint = Color.White
               )
-              Spacer(modifier = Modifier.width(4.dp))
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "${if (isVideo) "Encrypted Video" else "Encrypted Audio"} • Stream Decryption",
-                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                color = SecureVaultAmber,
-                fontSize = 11.sp
+                text = item.originalFileName,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+              )
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                  imageVector = Icons.Default.EnhancedEncryption,
+                  contentDescription = null,
+                  tint = SecureVaultAmber,
+                  modifier = Modifier.size(12.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                  text = "${if (isVideo) "Encrypted Video" else "Encrypted Audio"} • Stream Decryption",
+                  style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                  color = SecureVaultAmber,
+                  fontSize = 11.sp
+                )
+              }
+            }
+
+            if (isVideo) {
+              IconButton(
+                onClick = { setFullscreen(true) },
+                modifier = Modifier.testTag("video_fullscreen_toggle_button")
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Fullscreen,
+                  contentDescription = "Enter Fullscreen",
+                  tint = Color.White
+                )
+              }
+            }
+          }
+        }
+      } else if (isVideo) {
+        // Exit Fullscreen Floating Button (top-right)
+        Box(
+          modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+          contentAlignment = Alignment.TopEnd
+        ) {
+          Surface(
+            onClick = { setFullscreen(false) },
+            shape = CircleShape,
+            color = Color(0x99000000),
+            shadowElevation = 4.dp,
+            modifier = Modifier
+              .size(44.dp)
+              .testTag("video_exit_fullscreen_button")
+          ) {
+            Box(
+              contentAlignment = Alignment.Center,
+              modifier = Modifier.fillMaxSize()
+            ) {
+              Icon(
+                imageVector = Icons.Default.FullscreenExit,
+                contentDescription = "Exit Fullscreen",
+                tint = Color.White,
+                modifier = Modifier.size(24.dp)
               )
             }
           }
@@ -676,3 +769,13 @@ private fun formatFileSize(bytes: Long): String {
     else -> "$bytes B"
   }
 }
+
+private fun Context.findActivity(): Activity? {
+  var current = this
+  while (current is ContextWrapper) {
+    if (current is Activity) return current
+    current = current.baseContext
+  }
+  return null
+}
+
