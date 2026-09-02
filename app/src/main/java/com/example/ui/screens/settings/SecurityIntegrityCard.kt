@@ -2,6 +2,11 @@ package com.example.ui.screens.settings
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -138,7 +143,7 @@ fun SecurityIntegrityCard(
       .fillMaxWidth()
       .clip(RoundedCornerShape(12.dp))
       .border(1.dp, overallColor.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-      .animateContentSize()
+      .animateContentSize(animationSpec = tween(180))
       .testTag("security_integrity_diagnostic_card"),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
   ) {
@@ -284,7 +289,6 @@ private fun IntegrityItemRow(
       .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
       .clickable { onToggleExpand() }
       .padding(10.dp)
-      .animateContentSize()
       .testTag("integrity_row_${item.id}")
   ) {
     Row(
@@ -329,7 +333,11 @@ private fun IntegrityItemRow(
       )
     }
 
-    AnimatedVisibility(visible = isExpanded) {
+    AnimatedVisibility(
+      visible = isExpanded,
+      enter = expandVertically(animationSpec = tween(180)) + fadeIn(animationSpec = tween(140)),
+      exit = shrinkVertically(animationSpec = tween(180)) + fadeOut(animationSpec = tween(120))
+    ) {
       Column(
         modifier = Modifier
           .fillMaxWidth()
