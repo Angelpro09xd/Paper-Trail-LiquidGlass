@@ -646,9 +646,9 @@ fun DashboardScreen(
         }
       }
 
-      // Bottom padding for scroll
+      // Bottom padding so content clears the floating glass navigation bar
       item {
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(com.example.ui.glass.LiquidGlassDefaults.BottomBarClearance))
       }
     }
   }

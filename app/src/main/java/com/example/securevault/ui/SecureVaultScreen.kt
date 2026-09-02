@@ -357,7 +357,9 @@ fun SecureVaultScreen(
           text = { Text("Add File", fontWeight = FontWeight.Bold) },
           containerColor = SecureVaultAmber,
           contentColor = Color.White,
-          modifier = Modifier.testTag("securevault_add_file_fab")
+          modifier = Modifier
+            .padding(bottom = com.example.ui.glass.LiquidGlassDefaults.BottomBarClearance)
+            .testTag("securevault_add_file_fab")
         )
       },
       snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -608,7 +610,12 @@ fun SecureVaultScreen(
               .weight(1f)
               .fillMaxWidth()
               .testTag("securevault_files_list"),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 88.dp),
+            contentPadding = PaddingValues(
+              start = 16.dp,
+              end = 16.dp,
+              top = 8.dp,
+              bottom = com.example.ui.glass.LiquidGlassDefaults.BottomBarClearance
+            ),
             verticalArrangement = Arrangement.spacedBy(10.dp)
           ) {
             items(secureFiles, key = { it.id }) { item ->

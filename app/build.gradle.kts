@@ -115,6 +115,9 @@ dependencies {
   // Performance / Baseline Profile installer
   implementation(libs.androidx.profileinstaller)
 
+  // Liquid Glass effect (real-time backdrop blur / SDF refraction for Compose)
+  implementation(libs.kyant.backdrop)
+
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

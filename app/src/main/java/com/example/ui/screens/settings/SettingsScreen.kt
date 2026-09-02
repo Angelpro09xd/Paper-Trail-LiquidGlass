@@ -419,6 +419,9 @@ fun SettingsScreen(
           Text("Local-First Receipt, Warranty & Subscription Vault", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
       }
+
+      // Bottom padding so content clears the floating glass navigation bar
+      Spacer(modifier = Modifier.height(com.example.ui.glass.LiquidGlassDefaults.BottomBarClearance))
     }
   }
 }

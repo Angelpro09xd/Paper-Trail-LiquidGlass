@@ -149,7 +149,9 @@ fun VaultListScreen(
         onClick = onNavigateToCapture,
         containerColor = MaterialTheme.colorScheme.primary,
         contentColor = MaterialTheme.colorScheme.onPrimary,
-        modifier = Modifier.testTag("fab_scan_receipt")
+        modifier = Modifier
+          .padding(bottom = com.example.ui.glass.LiquidGlassDefaults.BottomBarClearance)
+          .testTag("fab_scan_receipt")
       ) {
         Row(
           modifier = Modifier.padding(horizontal = 16.dp),
@@ -328,7 +330,12 @@ fun VaultListScreen(
       } else {
         LazyColumn(
           modifier = Modifier.fillMaxSize(),
-          contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 88.dp),
+          contentPadding = PaddingValues(
+            start = 16.dp,
+            end = 16.dp,
+            top = 8.dp,
+            bottom = com.example.ui.glass.LiquidGlassDefaults.BottomBarClearance
+          ),
           verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
           items(items, key = { it.id }) { item ->

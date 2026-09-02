@@ -3,27 +3,21 @@ package com.example.ui.navigation
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.EnhancedEncryption
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -36,6 +30,9 @@ import androidx.navigation.navArgument
 import com.example.data.TutorialPreferences
 import com.example.securevault.ui.SecureVaultScreen
 import com.example.securevault.ui.SecureVaultViewModel
+import com.example.ui.glass.GlassNavigationBar
+import com.example.ui.glass.glassBackdropSource
+import com.example.ui.glass.rememberGlassBackdrop
 import com.example.ui.screens.auth.BiometricLockScreen
 import com.example.ui.screens.capture.CaptureOcrScreen
 import com.example.ui.screens.dashboard.DashboardScreen
@@ -104,43 +101,15 @@ fun PaperTrailAppContent(
       Screen.Settings.route
     )
 
-    Scaffold(
-      bottomBar = {
-        if (showBottomBar) {
-          NavigationBar(
-            containerColor = MaterialTheme.colorScheme.surface,
-            contentColor = MaterialTheme.colorScheme.onSurface
-          ) {
-            bottomNavItems.forEach { (route, label, icon) ->
-              val isSelected = currentRoute == route
-              NavigationBarItem(
-                icon = { Icon(icon, contentDescription = label) },
-                label = { Text(label) },
-                selected = isSelected,
-                onClick = {
-                  if (currentRoute != route) {
-                    if (currentRoute == Screen.SecureVault.route) {
-                      secureVaultViewModel.lockVault()
-                    }
-                    navController.navigateToTopLevelDestination(route)
-                  }
-                },
-                colors = NavigationBarItemDefaults.colors(
-                  indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                  selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                  selectedTextColor = MaterialTheme.colorScheme.primary
-                ),
-                modifier = Modifier.testTag("nav_item_$route")
-              )
-            }
-          }
-        }
-      }
-    ) { paddingValues ->
+    val backdrop = rememberGlassBackdrop()
+
+    Box(modifier = Modifier.fillMaxSize()) {
       NavHost(
         navController = navController,
         startDestination = startDestination,
-        modifier = Modifier.padding(paddingValues),
+        modifier = Modifier
+          .fillMaxSize()
+          .glassBackdropSource(backdrop),
         enterTransition = { androidx.compose.animation.fadeIn(com.example.ui.theme.PaperTrailMotion.fadeIn) },
         exitTransition = { androidx.compose.animation.fadeOut(com.example.ui.theme.PaperTrailMotion.fadeOut) },
         popEnterTransition = { androidx.compose.animation.fadeIn(com.example.ui.theme.PaperTrailMotion.fadeIn) },
@@ -238,6 +207,27 @@ fun PaperTrailAppContent(
             onNavigateBack = { navController.popBackStack() }
           )
         }
+      }
+
+      AnimatedVisibility(
+        visible = showBottomBar,
+        modifier = Modifier.align(Alignment.BottomCenter),
+        enter = fadeIn(com.example.ui.theme.PaperTrailMotion.fadeIn),
+        exit = fadeOut(com.example.ui.theme.PaperTrailMotion.fadeOut)
+      ) {
+        GlassNavigationBar(
+          backdrop = backdrop,
+          items = bottomNavItems,
+          currentRoute = currentRoute,
+          onItemSelected = { route ->
+            if (currentRoute != route) {
+              if (currentRoute == Screen.SecureVault.route) {
+                secureVaultViewModel.lockVault()
+              }
+              navController.navigateToTopLevelDestination(route)
+            }
+          }
+        )
       }
     }
   }
