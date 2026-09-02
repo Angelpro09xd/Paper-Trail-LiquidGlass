@@ -109,6 +109,28 @@ class SecureVaultViewModel(application: Application) : AndroidViewModel(applicat
     _infoMessage.value = null
   }
 
+  fun setCustomFolderUri(uri: Uri?, activity: FragmentActivity) {
+    if (uri != null) {
+      try {
+        activity.contentResolver.takePersistableUriPermission(
+          uri,
+          android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        )
+      } catch (e: Exception) {
+        Log.w(TAG, "Could not take persistable URI permission: ${e.message}")
+      }
+    }
+    repository.storagePreferences.setCustomFolderUri(uri)
+    val name = repository.storagePreferences.getCustomFolderDisplayName(activity)
+    if (name != null) {
+      _infoMessage.value = "Custom vault folder set: $name"
+    }
+  }
+
+  fun getCustomFolderDisplayName(activity: FragmentActivity): String? {
+    return repository.storagePreferences.getCustomFolderDisplayName(activity)
+  }
+
   fun lockVault() {
     authManager.lock()
     closePreview()

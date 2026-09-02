@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.Log
+import androidx.documentfile.provider.DocumentFile
 import com.example.securevault.logging.CryptoLogger
 import com.example.securevault.model.SecureFileItem
 import com.example.securevault.util.SafeFileMoveHelper
@@ -34,6 +35,31 @@ sealed interface DecryptionResult {
   data class TooLargeToPreview(val fileSizeBytes: Long) : DecryptionResult
 }
 
+sealed interface BlobHandle {
+  fun openInputStream(): InputStream?
+  fun length(): Long
+  fun delete(): Boolean
+  val exists: Boolean
+}
+
+class FileBlobHandle(val file: File) : BlobHandle {
+  override fun openInputStream(): InputStream? = if (file.exists()) FileInputStream(file) else null
+  override fun length(): Long = file.length()
+  override fun delete(): Boolean = file.delete()
+  override val exists: Boolean get() = file.exists()
+}
+
+class DocumentBlobHandle(val context: Context, val docFile: DocumentFile) : BlobHandle {
+  override fun openInputStream(): InputStream? = try {
+    context.contentResolver.openInputStream(docFile.uri)
+  } catch (e: Exception) {
+    null
+  }
+  override fun length(): Long = docFile.length()
+  override fun delete(): Boolean = docFile.delete()
+  override val exists: Boolean get() = docFile.exists()
+}
+
 class SecureVaultRepository(
   private val dao: SecureVaultDao,
   private val context: Context,
@@ -60,6 +86,18 @@ class SecureVaultRepository(
     return iv
   }
 
+  fun getCustomFolderDocument(): DocumentFile? {
+    val uriString = storagePreferences.getCustomFolderUriString() ?: return null
+    return try {
+      val treeUri = Uri.parse(uriString)
+      val doc = DocumentFile.fromTreeUri(context, treeUri)
+      if (doc != null && doc.exists() && doc.canWrite()) doc else null
+    } catch (e: Exception) {
+      Log.w(TAG, "Failed to resolve custom folder DocumentFile: ${e.message}")
+      null
+    }
+  }
+
   fun getVaultDir(location: VaultStorageLocation = storagePreferences.getStorageLocation()): File {
     return when (location) {
       VaultStorageLocation.INTERNAL_SANDBOX -> {
@@ -77,35 +115,56 @@ class SecureVaultRepository(
         }
       }
       VaultStorageLocation.PERSISTENT_CUSTOM_FOLDER -> {
-        val extDir = context.getExternalFilesDir(null)
-        val persistentDir = if (extDir != null) {
-          File(extDir.parentFile?.parentFile?.parentFile?.parentFile, "Documents/.secure_vault_store")
-            .takeIf { it.exists() || it.mkdirs() }
-            ?: File(extDir, "persistent_vault").apply { mkdirs() }
-        } else {
-          File(context.filesDir, "persistent_vault").apply { mkdirs() }
-        }
-        persistentDir.apply {
+        // When a custom SAF tree folder is active, blob IO operates via DocumentFile.
+        // Fall back to the internal sandbox directory if a File-based fallback is required.
+        File(context.filesDir, "securevault").apply {
           if (!exists()) mkdirs()
-          try {
-            File(this, ".nomedia").createNewFile()
-          } catch (_: Exception) {}
         }
       }
     }
   }
 
-  fun findBlobFile(blobPath: String): File? {
-    // 1. Check active vault directory
-    val activeFile = File(getVaultDir(), blobPath)
-    if (activeFile.exists()) return activeFile
+  fun findBlobHandle(blobPath: String): BlobHandle? {
+    val loc = storagePreferences.getStorageLocation()
 
-    // 2. Fallback check across all possible locations
-    for (loc in VaultStorageLocation.entries) {
-      val file = File(getVaultDir(loc), blobPath)
-      if (file.exists()) return file
+    // 1. If currently in PERSISTENT_CUSTOM_FOLDER, check custom SAF tree first
+    if (loc == VaultStorageLocation.PERSISTENT_CUSTOM_FOLDER) {
+      val customTree = getCustomFolderDocument()
+      if (customTree != null) {
+        val child = customTree.findFile(blobPath)
+        if (child != null && child.exists()) {
+          return DocumentBlobHandle(context, child)
+        }
+      }
     }
 
+    // 2. Check active location's File path
+    val activeFile = File(getVaultDir(loc), blobPath)
+    if (activeFile.exists()) return FileBlobHandle(activeFile)
+
+    // 3. Fallback search: check custom folder if it wasn't the active location
+    if (loc != VaultStorageLocation.PERSISTENT_CUSTOM_FOLDER) {
+      val customTree = getCustomFolderDocument()
+      if (customTree != null) {
+        val child = customTree.findFile(blobPath)
+        if (child != null && child.exists()) {
+          return DocumentBlobHandle(context, child)
+        }
+      }
+    }
+
+    // 4. Fallback search across standard File locations
+    for (candidateLoc in listOf(VaultStorageLocation.INTERNAL_SANDBOX, VaultStorageLocation.EXTERNAL_APP)) {
+      val file = File(getVaultDir(candidateLoc), blobPath)
+      if (file.exists()) return FileBlobHandle(file)
+    }
+
+    return null
+  }
+
+  fun findBlobFile(blobPath: String): File? {
+    val handle = findBlobHandle(blobPath)
+    if (handle is FileBlobHandle) return handle.file
     return null
   }
 
@@ -117,7 +176,8 @@ class SecureVaultRepository(
     deleteOriginalAfterImport: Boolean = true,
     onProgress: (bytesWritten: Long, totalBytes: Long) -> Unit = { _, _ -> }
   ): Result<SecureFileItem> = withContext(Dispatchers.IO) {
-    var blobFile: File? = null
+    var createdDocFile: DocumentFile? = null
+    var createdBlobFile: File? = null
     try {
       CryptoLogger.info("IMPORT", "Initiating secure envelope import for URI: $uri")
       // 1. Resolve original filename and MIME type from URI metadata
@@ -164,10 +224,29 @@ class SecureVaultRepository(
       rawDekBytes.fill(0)
       CryptoLogger.hardware("ZEROIZE", "Plaintext DEK bytes purged from volatile memory.")
 
-      // 5. Chunk-encrypt content directly to disk: 1MB chunks with individual AES-GCM authentication tags
+      // 5. Open target stream based on storage location
       val blobName = UUID.randomUUID().toString()
-      val targetBlobFile = File(getVaultDir(), blobName)
-      blobFile = targetBlobFile
+      val activeLoc = storagePreferences.getStorageLocation()
+
+      val rawOutStream: OutputStream = if (activeLoc == VaultStorageLocation.PERSISTENT_CUSTOM_FOLDER) {
+        val customTree = getCustomFolderDocument()
+        if (customTree != null) {
+          val doc = customTree.createFile("application/octet-stream", blobName)
+            ?: throw IllegalStateException("Failed to create blob document in custom folder")
+          createdDocFile = doc
+          context.contentResolver.openOutputStream(doc.uri)
+            ?: throw IllegalStateException("Failed to open output stream for custom folder document")
+        } else {
+          CryptoLogger.warn("STORAGE_FALLBACK", "No custom folder selected yet. Falling back to internal sandbox.")
+          val targetFile = File(getVaultDir(VaultStorageLocation.INTERNAL_SANDBOX), blobName)
+          createdBlobFile = targetFile
+          FileOutputStream(targetFile)
+        }
+      } else {
+        val targetFile = File(getVaultDir(activeLoc), blobName)
+        createdBlobFile = targetFile
+        FileOutputStream(targetFile)
+      }
 
       var totalBytesWritten = 0L
       var chunkIndex = 0L
@@ -175,9 +254,8 @@ class SecureVaultRepository(
 
       CryptoLogger.info("STREAM_CIPHER", "Streaming AES-256-GCM chunks (1MB blocks) to target cipher blob: $blobName")
 
-      FileOutputStream(targetBlobFile).use { fos ->
-        BufferedOutputStream(fos, 64 * 1024).use { out ->
-          // Write format magic header
+      rawOutStream.use { rawOut ->
+        BufferedOutputStream(rawOut, 64 * 1024).use { out ->
           out.write(CHUNK_MAGIC)
 
           context.contentResolver.openInputStream(uri)?.let { BufferedInputStream(it, 64 * 1024) }?.use { input ->
@@ -231,7 +309,7 @@ class SecureVaultRepository(
 
       val generatedId = dao.insertFile(item)
       val savedItem = item.copy(id = generatedId)
-      CryptoLogger.success("STORAGE_FLUSH", "Encrypted blob committed: $blobName (${actualSize} bytes) into ${storagePreferences.getStorageLocation().title}")
+      CryptoLogger.success("STORAGE_FLUSH", "Encrypted blob committed: $blobName (${actualSize} bytes) into ${activeLoc.title}")
 
       // 7. Delete original unencrypted source file if requested ("Move to Vault" behavior)
       if (deleteOriginalAfterImport) {
@@ -244,15 +322,12 @@ class SecureVaultRepository(
         }
       }
 
-      Log.i(TAG, "Successfully imported and envelope-encrypted file $fileName ($actualSize bytes) into ${storagePreferences.getStorageLocation().title}")
+      Log.i(TAG, "Successfully imported and envelope-encrypted file $fileName ($actualSize bytes) into ${activeLoc.title}")
       Result.success(savedItem)
     } catch (e: Throwable) {
       CryptoLogger.error("IMPORT_FAIL", "Import error: ${e.message}")
-      blobFile?.let {
-        if (it.exists()) {
-          it.delete()
-        }
-      }
+      createdDocFile?.delete()
+      createdBlobFile?.let { if (it.exists()) it.delete() }
       Log.e(TAG, "Error importing file to SecureVault: ${e.message}", e)
       Result.failure(e)
     }
@@ -266,9 +341,9 @@ class SecureVaultRepository(
   ): Result<Unit> = withContext(Dispatchers.IO) {
     try {
       CryptoLogger.info("EXPORT_START", "Initiating stream-decryption export for '${item.originalFileName}'")
-      val blobFile = findBlobFile(item.encryptedBlobPath)
-      if (blobFile == null || !blobFile.exists()) {
-        CryptoLogger.error("EXPORT_FAIL", "Encrypted blob not found on disk")
+      val blobHandle = findBlobHandle(item.encryptedBlobPath)
+      if (blobHandle == null || !blobHandle.exists) {
+        CryptoLogger.error("EXPORT_FAIL", "Encrypted blob not found in storage")
         return@withContext Result.failure(IllegalStateException("Encrypted blob file does not exist on disk"))
       }
 
@@ -297,7 +372,7 @@ class SecureVaultRepository(
         var totalBytesWritten = 0L
 
         context.contentResolver.openOutputStream(destinationUri)?.let { BufferedOutputStream(it, 64 * 1024) }?.use { output ->
-          BufferedInputStream(FileInputStream(blobFile), 64 * 1024).use { bis ->
+          blobHandle.openInputStream()?.let { BufferedInputStream(it, 64 * 1024) }?.use { bis ->
             val header = ByteArray(4)
             bis.mark(4)
             val headerRead = bis.read(header)
@@ -363,7 +438,7 @@ class SecureVaultRepository(
               }
             }
             output.flush()
-          }
+          } ?: return@withContext Result.failure(IllegalStateException("Could not open input stream from blob"))
         } ?: return@withContext Result.failure(IllegalStateException("Could not open destination output stream"))
 
         CryptoLogger.success("EXPORT_COMPLETE", "Successfully decrypted & exported ${item.originalFileName} ($totalBytesWritten bytes)")
@@ -387,8 +462,8 @@ class SecureVaultRepository(
   ): Result<DecryptionResult> = withContext(Dispatchers.IO) {
     try {
       CryptoLogger.info("PREVIEW_DECRYPT", "Authorizing in-memory decryption for preview: '${item.originalFileName}'")
-      val blobFile = findBlobFile(item.encryptedBlobPath)
-      if (blobFile == null || !blobFile.exists()) {
+      val blobHandle = findBlobHandle(item.encryptedBlobPath)
+      if (blobHandle == null || !blobHandle.exists) {
         CryptoLogger.error("PREVIEW_FAIL", "Encrypted blob file does not exist on disk")
         return@withContext Result.failure(IllegalStateException("Encrypted blob file does not exist on disk"))
       }
@@ -423,7 +498,7 @@ class SecureVaultRepository(
         var isOversized = false
         var totalRead = 0L
 
-        BufferedInputStream(FileInputStream(blobFile), 64 * 1024).use { bis ->
+        blobHandle.openInputStream()?.let { BufferedInputStream(it, 64 * 1024) }?.use { bis ->
           val header = ByteArray(4)
           bis.mark(4)
           val headerRead = bis.read(header)
@@ -494,7 +569,7 @@ class SecureVaultRepository(
               }
             }
           }
-        }
+        } ?: return@withContext Result.failure(IllegalStateException("Could not open input stream from blob"))
 
         if (isOversized) {
           val reportedSize = if (item.fileSizeBytes > 0) item.fileSizeBytes else totalRead
@@ -517,9 +592,9 @@ class SecureVaultRepository(
 
   suspend fun deleteFile(item: SecureFileItem) = withContext(Dispatchers.IO) {
     try {
-      val blobFile = findBlobFile(item.encryptedBlobPath)
-      if (blobFile != null && blobFile.exists()) {
-        blobFile.delete()
+      val blobHandle = findBlobHandle(item.encryptedBlobPath)
+      if (blobHandle != null && blobHandle.exists) {
+        blobHandle.delete()
       }
       dao.deleteFile(item)
       Log.i(TAG, "Deleted file ${item.id} and removed encrypted blob.")
@@ -533,17 +608,52 @@ class SecureVaultRepository(
     onProgress: (migratedCount: Int, totalCount: Int) -> Unit = { _, _ -> }
   ): Result<Int> = withContext(Dispatchers.IO) {
     try {
-      val targetDir = getVaultDir(targetLocation)
       val allItems = dao.getAllFilesSync()
       var migrated = 0
 
+      val customTree = if (targetLocation == VaultStorageLocation.PERSISTENT_CUSTOM_FOLDER) {
+        getCustomFolderDocument() ?: throw IllegalStateException("No valid custom folder selected via SAF")
+      } else null
+
       for ((index, item) in allItems.withIndex()) {
-        val existingBlob = findBlobFile(item.encryptedBlobPath)
-        if (existingBlob != null && existingBlob.exists() && existingBlob.parentFile?.absolutePath != targetDir.absolutePath) {
-          val destFile = File(targetDir, item.encryptedBlobPath)
-          existingBlob.copyTo(destFile, overwrite = true)
-          if (destFile.exists() && destFile.length() == existingBlob.length()) {
-            existingBlob.delete()
+        val existingHandle = findBlobHandle(item.encryptedBlobPath)
+        if (existingHandle != null && existingHandle.exists) {
+          val buffer = ByteArray(64 * 1024)
+          var writeSuccess = false
+
+          if (targetLocation == VaultStorageLocation.PERSISTENT_CUSTOM_FOLDER) {
+            val createdDoc = customTree!!.createFile("application/octet-stream", item.encryptedBlobPath)
+            if (createdDoc != null) {
+              context.contentResolver.openOutputStream(createdDoc.uri)?.use { out ->
+                existingHandle.openInputStream()?.use { inp ->
+                  var read: Int
+                  while (inp.read(buffer).also { read = it } != -1) {
+                    out.write(buffer, 0, read)
+                  }
+                }
+              }
+              if (createdDoc.length() == existingHandle.length()) {
+                writeSuccess = true
+              }
+            }
+          } else {
+            val destDir = getVaultDir(targetLocation)
+            val destFile = File(destDir, item.encryptedBlobPath)
+            FileOutputStream(destFile).use { out ->
+              existingHandle.openInputStream()?.use { inp ->
+                var read: Int
+                while (inp.read(buffer).also { read = it } != -1) {
+                  out.write(buffer, 0, read)
+                }
+              }
+            }
+            if (destFile.exists() && destFile.length() == existingHandle.length()) {
+              writeSuccess = true
+            }
+          }
+
+          if (writeSuccess) {
+            existingHandle.delete()
             migrated++
           }
         }
@@ -599,8 +709,8 @@ class SecureVaultRepository(
         // 3. Write all encrypted blobs
         val buffer = ByteArray(64 * 1024)
         for ((index, item) in allItems.withIndex()) {
-          val blobFile = findBlobFile(item.encryptedBlobPath)
-          val blobLength = blobFile?.length() ?: 0L
+          val blobHandle = findBlobHandle(item.encryptedBlobPath)
+          val blobLength = blobHandle?.length() ?: 0L
 
           val nameBytes = item.encryptedBlobPath.toByteArray(Charsets.UTF_8)
           out.write(nameBytes.size and 0xFF)
@@ -615,8 +725,8 @@ class SecureVaultRepository(
           out.write(((blobLength ushr 8) and 0xFF).toInt())
           out.write((blobLength and 0xFF).toInt())
 
-          if (blobFile != null && blobFile.exists()) {
-            FileInputStream(blobFile).use { fis ->
+          if (blobHandle != null && blobHandle.exists) {
+            blobHandle.openInputStream()?.use { fis ->
               var read: Int
               while (fis.read(buffer).also { read = it } != -1) {
                 out.write(buffer, 0, read)
@@ -642,7 +752,9 @@ class SecureVaultRepository(
     onProgress: (restoredCount: Int, totalCount: Int) -> Unit = { _, _ -> }
   ): Result<Int> = withContext(Dispatchers.IO) {
     try {
-      val targetDir = getVaultDir()
+      val activeLoc = storagePreferences.getStorageLocation()
+      val customTree = if (activeLoc == VaultStorageLocation.PERSISTENT_CUSTOM_FOLDER) getCustomFolderDocument() else null
+      val targetDir = getVaultDir(activeLoc)
       var restoredCount = 0
 
       context.contentResolver.openInputStream(sourceUri)?.let { BufferedInputStream(it, 64 * 1024) }?.use { input ->
@@ -719,8 +831,18 @@ class SecureVaultRepository(
             blobLen = (blobLen shl 8) or (sizeBuf[b].toLong() and 0xFF)
           }
 
-          val targetBlobFile = File(targetDir, blobName)
-          FileOutputStream(targetBlobFile).use { fos ->
+          var bytesRestoredForBlob = 0L
+          val outStream: OutputStream = if (customTree != null) {
+            val doc = customTree.createFile("application/octet-stream", blobName)
+              ?: throw IllegalStateException("Failed to create restored blob doc in custom folder")
+            context.contentResolver.openOutputStream(doc.uri)
+              ?: throw IllegalStateException("Failed to open output stream for custom doc")
+          } else {
+            val targetBlobFile = File(targetDir, blobName)
+            FileOutputStream(targetBlobFile)
+          }
+
+          outStream.use { fos ->
             var remaining = blobLen
             while (remaining > 0) {
               val toRead = remaining.coerceAtMost(buffer.size.toLong()).toInt()
@@ -728,6 +850,7 @@ class SecureVaultRepository(
               if (r == -1) break
               fos.write(buffer, 0, r)
               remaining -= r
+              bytesRestoredForBlob += r
             }
           }
 
@@ -736,7 +859,7 @@ class SecureVaultRepository(
             val item = SecureFileItem(
               originalFileName = jsonMeta.optString("originalFileName", "restored_file"),
               mimeType = jsonMeta.optString("mimeType", "application/octet-stream"),
-              fileSizeBytes = jsonMeta.optLong("fileSizeBytes", targetBlobFile.length()),
+              fileSizeBytes = jsonMeta.optLong("fileSizeBytes", bytesRestoredForBlob),
               encryptedBlobPath = blobName,
               dateAdded = jsonMeta.optLong("dateAdded", System.currentTimeMillis()),
               iv = jsonMeta.optString("iv", ""),
@@ -758,3 +881,4 @@ class SecureVaultRepository(
     }
   }
 }
+

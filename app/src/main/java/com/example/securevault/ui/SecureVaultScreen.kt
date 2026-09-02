@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.EnhancedEncryption
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
@@ -147,6 +148,7 @@ fun SecureVaultScreen(
   val infoMessage by viewModel.infoMessage.collectAsStateWithLifecycle()
   val activePreview by viewModel.activePreview.collectAsStateWithLifecycle()
   val storageLocation by viewModel.storageLocation.collectAsStateWithLifecycle()
+  val customFolderUri by viewModel.customFolderUriString.collectAsStateWithLifecycle()
 
   // Hardware Security Strict Gate check
   val isStrictGateEnabled = remember { SecurityAuditPreferences.isStrictGateEnabled(context) }
@@ -227,6 +229,15 @@ fun SecureVaultScreen(
   ) { uri ->
     if (uri != null && activity != null) {
       viewModel.restoreVaultBackup(uri, activity)
+    }
+  }
+
+  // SAF Document Tree Picker for Persistent Custom Folder location
+  val openDocumentTreeLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.OpenDocumentTree()
+  ) { uri ->
+    if (uri != null && activity != null) {
+      viewModel.setCustomFolderUri(uri, activity)
     }
   }
 
@@ -619,11 +630,18 @@ fun SecureVaultScreen(
   if (showStorageDialog) {
     StorageSettingsDialog(
       currentLocation = storageLocation,
+      customFolderUri = customFolderUri,
+      customFolderDisplayName = if (activity != null) viewModel.getCustomFolderDisplayName(activity) else null,
+      onPickCustomFolder = { openDocumentTreeLauncher.launch(null) },
       onSelectLocation = { targetLoc, migrate ->
         if (activity != null) {
-          viewModel.changeStorageLocation(targetLoc, migrate, activity)
+          if (targetLoc == VaultStorageLocation.PERSISTENT_CUSTOM_FOLDER && customFolderUri.isNullOrBlank()) {
+            openDocumentTreeLauncher.launch(null)
+          } else {
+            viewModel.changeStorageLocation(targetLoc, migrate, activity)
+            showStorageDialog = false
+          }
         }
-        showStorageDialog = false
       },
       onExportBackup = {
         showStorageDialog = false
@@ -692,6 +710,9 @@ fun SecureVaultScreen(
 @Composable
 private fun StorageSettingsDialog(
   currentLocation: VaultStorageLocation,
+  customFolderUri: String?,
+  customFolderDisplayName: String?,
+  onPickCustomFolder: () -> Unit,
   onSelectLocation: (target: VaultStorageLocation, migrate: Boolean) -> Unit,
   onExportBackup: () -> Unit,
   onRestoreBackup: () -> Unit,
@@ -791,6 +812,8 @@ private fun StorageSettingsDialog(
             location = loc,
             isSelected = selectedLocation == loc,
             isCurrent = currentLocation == loc,
+            customFolderDisplayName = if (loc == VaultStorageLocation.PERSISTENT_CUSTOM_FOLDER) customFolderDisplayName else null,
+            onPickCustomFolder = onPickCustomFolder,
             onSelect = { selectedLocation = loc }
           )
           Spacer(modifier = Modifier.height(8.dp))
@@ -823,14 +846,27 @@ private fun StorageSettingsDialog(
 
         Spacer(modifier = Modifier.height(8.dp))
 
+        val buttonText = when {
+          selectedLocation == VaultStorageLocation.PERSISTENT_CUSTOM_FOLDER && customFolderUri.isNullOrBlank() ->
+            "Select Folder (SAF) to Activate"
+          selectedLocation != currentLocation ->
+            "Apply & Switch Location"
+          else ->
+            "Keep Current Location"
+        }
+
         Button(
           onClick = {
-            onSelectLocation(selectedLocation, migrateExisting && (selectedLocation != currentLocation))
+            if (selectedLocation == VaultStorageLocation.PERSISTENT_CUSTOM_FOLDER && customFolderUri.isNullOrBlank()) {
+              onPickCustomFolder()
+            } else {
+              onSelectLocation(selectedLocation, migrateExisting && (selectedLocation != currentLocation))
+            }
           },
           modifier = Modifier.fillMaxWidth(),
           colors = ButtonDefaults.buttonColors(containerColor = SecureVaultAmber)
         ) {
-          Text(if (selectedLocation != currentLocation) "Apply & Switch Location" else "Keep Current Location", fontWeight = FontWeight.Bold)
+          Text(buttonText, fontWeight = FontWeight.Bold)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -887,10 +923,10 @@ private fun StorageLocationOptionCard(
   location: VaultStorageLocation,
   isSelected: Boolean,
   isCurrent: Boolean,
+  customFolderDisplayName: String? = null,
+  onPickCustomFolder: () -> Unit = {},
   onSelect: () -> Unit
 ) {
-  var showDetails by remember { mutableStateOf(isSelected) }
-
   Card(
     modifier = Modifier
       .fillMaxWidth()
@@ -900,10 +936,7 @@ private fun StorageLocationOptionCard(
         color = if (isSelected) SecureVaultAmber else MaterialTheme.colorScheme.outlineVariant,
         shape = RoundedCornerShape(12.dp)
       )
-      .clickable {
-        onSelect()
-        showDetails = !showDetails
-      },
+      .clickable { onSelect() },
     colors = CardDefaults.cardColors(
       containerColor = if (isSelected) SecureVaultAmberContainer.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surface
     )
@@ -967,6 +1000,66 @@ private fun StorageLocationOptionCard(
         lineHeight = 15.sp,
         color = MaterialTheme.colorScheme.onSurfaceVariant
       )
+
+      // Custom Folder Picker Controls
+      if (location == VaultStorageLocation.PERSISTENT_CUSTOM_FOLDER) {
+        Spacer(modifier = Modifier.height(8.dp))
+        Surface(
+          modifier = Modifier.fillMaxWidth(),
+          shape = RoundedCornerShape(8.dp),
+          color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+        ) {
+          Column(modifier = Modifier.padding(8.dp)) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+              ) {
+                Icon(
+                  imageVector = if (customFolderDisplayName != null) Icons.Default.FolderOpen else Icons.Default.WarningAmber,
+                  contentDescription = null,
+                  tint = if (customFolderDisplayName != null) SecureVaultAmber else MaterialTheme.colorScheme.error,
+                  modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Column {
+                  Text(
+                    text = if (customFolderDisplayName != null) "Configured Folder:" else "No folder selected yet",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (customFolderDisplayName != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error
+                  )
+                  if (customFolderDisplayName != null) {
+                    Text(
+                      text = customFolderDisplayName,
+                      style = MaterialTheme.typography.bodySmall,
+                      fontSize = 11.sp,
+                      color = SecureVaultAmber,
+                      fontWeight = FontWeight.SemiBold
+                    )
+                  }
+                }
+              }
+
+              OutlinedButton(
+                onClick = onPickCustomFolder,
+                modifier = Modifier.padding(start = 6.dp),
+                shape = RoundedCornerShape(8.dp)
+              ) {
+                Text(
+                  text = if (customFolderDisplayName != null) "Change" else "Choose Folder",
+                  fontSize = 11.sp,
+                  fontWeight = FontWeight.Bold
+                )
+              }
+            }
+          }
+        }
+      }
 
       // Pros and Cons breakdown
       Spacer(modifier = Modifier.height(8.dp))

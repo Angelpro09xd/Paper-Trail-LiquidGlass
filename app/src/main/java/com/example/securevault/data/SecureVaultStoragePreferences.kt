@@ -101,4 +101,15 @@ class SecureVaultStoragePreferences(private val context: Context) {
     }
     _customFolderUriString.value = uri?.toString()
   }
+
+  fun getCustomFolderDisplayName(ctx: Context = context): String? {
+    val uriStr = getCustomFolderUriString() ?: return null
+    return try {
+      val treeUri = Uri.parse(uriStr)
+      val doc = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, treeUri)
+      doc?.name ?: treeUri.lastPathSegment ?: uriStr
+    } catch (e: Exception) {
+      uriStr
+    }
+  }
 }

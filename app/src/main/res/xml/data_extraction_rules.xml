@@ -5,15 +5,37 @@
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <!-- Exclude internal databases (SQLCipher encrypted & plain receipts/vault databases) -->
+        <exclude domain="database" path="."/>
+
+        <!-- Exclude EncryptedSharedPreferences storing database master keys and passphrases -->
+        <exclude domain="sharedpref" path="papertrail_secure_vault_prefs.xml"/>
+        <exclude domain="sharedpref" path="papertrail_secure_vault_prefs_fallback.xml"/>
+        <exclude domain="sharedpref" path="securevault_encrypted_prefs.xml"/>
+        <exclude domain="sharedpref" path="securevault_encrypted_prefs_fallback.xml"/>
+
+        <!-- Exclude SecureVault encrypted blob files and internal receipts in files directory -->
+        <exclude domain="file" path="securevault"/>
+        <exclude domain="file" path="receipts"/>
+
+        <!-- Exclude app-specific external storage SecureVault directory -->
+        <exclude domain="external" path="securevault"/>
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <!-- Exclude internal databases from device-to-device migration -->
+        <exclude domain="database" path="."/>
+
+        <!-- Exclude EncryptedSharedPreferences from device-to-device migration -->
+        <exclude domain="sharedpref" path="papertrail_secure_vault_prefs.xml"/>
+        <exclude domain="sharedpref" path="papertrail_secure_vault_prefs_fallback.xml"/>
+        <exclude domain="sharedpref" path="securevault_encrypted_prefs.xml"/>
+        <exclude domain="sharedpref" path="securevault_encrypted_prefs_fallback.xml"/>
+
+        <!-- Exclude SecureVault encrypted blob files and receipts from device-to-device migration -->
+        <exclude domain="file" path="securevault"/>
+        <exclude domain="file" path="receipts"/>
+
+        <!-- Exclude app-specific external storage SecureVault directory -->
+        <exclude domain="external" path="securevault"/>
     </device-transfer>
-    -->
 </data-extraction-rules>
